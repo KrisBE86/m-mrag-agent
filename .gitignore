@@ -19,6 +19,12 @@ data/milvus/
 # User uploaded images for chat
 data/user_uploads/
 
+# Uploaded documents
+data/documents/
+
+# Extracted reference images
+data/reference_images/
+
 # Agent memory
 agent_memory.db
 agent_memory.db-shm
