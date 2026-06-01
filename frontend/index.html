@@ -69,6 +69,16 @@
                         <div v-if="msg.image" class="message-image">
                             <img :src="msg.image" alt="上传图片" />
                         </div>
+                        <!-- Thinking process (bot only, collapsible) -->
+                        <div v-if="msg.role === 'bot' && hasThinkingContent(msg)" class="thinking-section">
+                            <details class="thinking-details" :open="msg._streaming">
+                                <summary><i class="fas fa-brain"></i> 思考过程</summary>
+                                <div v-if="msg.thinking" class="thinking-content-text">{{ msg.thinking }}</div>
+                                <div v-for="(tc, i) in msg.toolCalls" :key="'tc-'+i" class="tool-call-entry">
+                                    <i class="fas fa-wrench"></i> 调用工具: <code>{{ tc.name }}</code>
+                                </div>
+                            </details>
+                        </div>
                         <!-- Message content -->
                         <div class="message-content" v-html="msg.role === 'user' ? escapeHtml(msg.text) : parseMarkdown(msg.text)"></div>
                         <!-- RAG trace -->

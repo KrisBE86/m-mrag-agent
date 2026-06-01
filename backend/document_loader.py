@@ -218,6 +218,13 @@ def _name_image_with_llm(
         return f"第{page_number}页图片{image_index + 1}"
 
 
+def _describe_image_with_vlm(image_bytes: bytes) -> str:
+    """Thin wrapper around vlm_client.describe_image_with_vlm for use in ingestion."""
+    from backend.vlm_client import describe_image_with_vlm
+    return describe_image_with_vlm(image_bytes)
+
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Three-level chunking (aligned with SuperMew)
 # ═══════════════════════════════════════════════════════════════════
@@ -343,6 +350,7 @@ class DocumentLoader:
         filename: str,
         image_output_dir: str | Path = "data/reference_images",
         use_llm_naming: bool = False,
+        use_vlm_description: bool = False,
     ) -> tuple[list[dict], list[dict]]:
         """
         Load a document, extract images, and chunk text.
@@ -352,6 +360,10 @@ class DocumentLoader:
             filename: Display filename for provenance tracking.
             image_output_dir: Directory to save extracted images.
             use_llm_naming: If True and no caption found, use LLM to name images.
+            use_vlm_description: If True, use Doubao Vision to generate pure
+                visual descriptions for each extracted image. Descriptions
+                are stored in distinguishing_features and added as L3 text
+                chunks for retrieval.
 
         Returns:
             (text_chunks, image_entries)
@@ -419,6 +431,12 @@ class DocumentLoader:
 
             captions = _extract_captions(page_text)
 
+            # Find parent IDs for VLM chunks (if any images on this page)
+            l1_chunks_on_page = [c for c in page_chunks if c.get("chunk_level") == 1]
+            l2_chunks_on_page = [c for c in page_chunks if c.get("chunk_level") == 2]
+            page_root_id = l1_chunks_on_page[0]["chunk_id"] if l1_chunks_on_page else ""
+            page_parent_id = l2_chunks_on_page[0]["chunk_id"] if l2_chunks_on_page else ""
+
             for img_data in page_images:
                 img_idx = img_data["image_index"]
                 img_bytes = img_data["image_bytes"]
@@ -443,6 +461,13 @@ class DocumentLoader:
                     if not name or name.startswith(f"第{page_num}页图片"):
                         name = page_text[:80] if page_text else f"第{page_num}页图片{img_idx + 1}"
 
+                # ── VLM visual description (optional) ──────────────────
+                vlm_description = ""
+                if use_vlm_description:
+                    vlm_description = _describe_image_with_vlm(img_bytes)
+                    if vlm_description:
+                        print(f"    ✓ 图片 {img_idx+1} VLM 描述已生成 ({len(vlm_description)}字)")
+
                 # Link to the nearest L3 chunk on this page.
                 l3_chunks = [c for c in page_chunks if c.get("chunk_level") == 3]
                 linked_chunk_id = l3_chunks[0]["chunk_id"] if l3_chunks else ""
@@ -454,11 +479,27 @@ class DocumentLoader:
                     "image_path": saved_path,
                     "poi_name": name,
                     "poi_description": caption or name,
-                    "distinguishing_features": caption or "",
+                    "distinguishing_features": vlm_description or caption or "",
                     "tags": f"图{img_idx + 1}, {doc_type}, p{page_num}",
                     "site": "",
                     "cave": "",
                 })
+
+                # ── Create VLM text chunk for retrieval ──────────────
+                if vlm_description:
+                    vlm_chunk_id = f"{filename}::p{page_num}::vlm::{img_idx}"
+                    text_chunks.append({
+                        **base_doc,
+                        "text": f"[图片视觉描述] {vlm_description}",
+                        "chunk_id": vlm_chunk_id,
+                        "parent_chunk_id": page_parent_id,
+                        "root_chunk_id": page_root_id,
+                        "chunk_level": 3,
+                        "chunk_idx": page_global_chunk_idx + 1000 + img_idx,
+                        "site": "",
+                        "cave": "",
+                        "poi_name": name,
+                    })
 
         return text_chunks, image_entries
 
@@ -506,6 +547,7 @@ class DocumentLoader:
 def ingest_document(
     file_path: str,
     use_llm_naming: bool = False,
+    use_vlm_description: bool = False,
 ) -> None:
     """
     End-to-end ingestion: document → chunking → PostgreSQL + dual Milvus.
@@ -513,6 +555,9 @@ def ingest_document(
     Args:
         file_path: Path to the document.
         use_llm_naming: If True, use LLM to name images without captions.
+        use_vlm_description: If True, use Doubao Vision to generate pure
+            visual descriptions for images. Descriptions replace image
+            placeholders in text and are indexed as L3 chunks.
     """
     from backend.milvus_writer import milvus_writer
     from backend.parent_chunk_store import parent_chunk_store
@@ -523,7 +568,9 @@ def ingest_document(
     print(f"正在处理: {filename}")
     loader = DocumentLoader()
     text_chunks, image_entries = loader.load_document(
-        str(file_path), filename, use_llm_naming=use_llm_naming,
+        str(file_path), filename,
+        use_llm_naming=use_llm_naming,
+        use_vlm_description=use_vlm_description,
     )
 
     # Separate L1/L2 (parent chunks) from L3 (leaf chunks).

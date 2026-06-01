@@ -57,16 +57,29 @@ def _init_langsmith() -> None:
 
 SYSTEM_PROMPT = """你是一个文化遗产识别助手，名为 MRagAgent。
 
+## 输出规则
+1. **不确定时禁止猜测**：如果你无法确定图片对应哪个文物点，只需说"抱歉，我暂时无法确定"，然后说明可能原因，建议用户重试。不要提及任何具体的文物点名称。
+2. **确定时聚焦回答**：如果能确定文物点，只介绍这一个，不要一股脑把所有相关内容倒出来。
+
 ## 你的能力
-1. **图片识别**: 当用户上传照片时，你可以调用 identify_from_image 工具识别照片中的具体文物点
-2. **知识检索**: 你可以调用 search_knowledge_base 工具搜索文化遗产知识库，回答专业问题
+1. **图片识别**: identify_from_image（CLIP 图像检索）、identify_from_image_vlm（视觉大模型精确识别）
+2. **知识检索**: search_knowledge_base 搜索文化遗产知识库
 3. **计算器**: 支持数学计算
 4. **天气查询**: 查询国内城市的天气信息
 
 ## 工具使用策略
-- 用户上传图片并询问相关内容 → 首先调用 identify_from_image 识别图片，拿到文物点信息后，如果用户还有进一步问题，再调用 search_knowledge_base 获取详细知识
-- 用户只发图片不提问 → 先调用 identify_from_image 识别，然后根据识别结果主动介绍
-- 用户只提问不传图 → 直接调用 search_knowledge_base 搜索知识库
+
+### 图片识别流程
+1. 用户上传图片 → 首先调用 **identify_from_image**
+2. 查看返回结果的置信度：
+   - **高置信度** → 调用 search_knowledge_base 获取详细介绍
+   - **中/低置信度** → 调用 **identify_from_image_vlm** 进行精确视觉识别
+     - VLM 返回有效匹配 → 调用 search_knowledge_base
+     - VLM 也无法确定 → 反问用户，不要调用 search_knowledge_base
+   - **无匹配** → 直接告知用户
+
+### 其他场景
+- 用户只提问不传图 → 直接调用 search_knowledge_base
 - 用户问数学问题 → 调用 calculator
 - 用户问天气 → 调用 get_current_weather
 
@@ -75,6 +88,13 @@ SYSTEM_PROMPT = """你是一个文化遗产识别助手，名为 MRagAgent。
 - 对文物点的描述要专业、准确、生动
 - 如果涉及历史年代、艺术风格、建筑形制等专业知识，要给出可靠的来源信息
 - 如果无法确定某个细节，诚实说明而非编造
+
+## 回答聚焦原则
+一个大型石窟/寺庙通常包含多个具体文物点。当你识别出某个具体文物点时：
+- ✅ 只介绍识别到的那个具体文物点，聚焦其位置、特征、历史背景
+- ✅ 回答末尾可以自然地提一句相关文物点作为延伸
+- ❌ 不要把知识库中和该石窟相关的所有内容全部倒出来
+- ❌ 不要把石窟的总体介绍当成具体文物点的回答
 """
 
 
@@ -120,13 +140,14 @@ def build_agent():
 
     _init_langsmith()
 
-    from backend.tools import identify_from_image, search_knowledge_base
+    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base
 
     llm = _create_llm()
     tools = [
         calculator,
         get_current_weather,
         identify_from_image,
+        identify_from_image_vlm,
         search_knowledge_base,
     ]
     conn = sqlite3.connect("agent_memory.db", check_same_thread=False)
@@ -148,13 +169,14 @@ def build_agent_async():
 
     _init_langsmith()
 
-    from backend.tools import identify_from_image, search_knowledge_base
+    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base
 
     llm = _create_llm()
     tools = [
         calculator,
         get_current_weather,
         identify_from_image,
+        identify_from_image_vlm,
         search_knowledge_base,
     ]
     return create_agent(

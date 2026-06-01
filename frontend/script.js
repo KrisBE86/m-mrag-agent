@@ -101,8 +101,15 @@ createApp({
             this.isStreaming = true;
             this.abortController = new AbortController();
 
-            // Create a placeholder bot message for streaming (SuperMew pattern).
-            this.messages.push({ role: 'bot', text: '', _streaming: true });
+            // Create a placeholder bot message for streaming.
+            // Fields: text (final answer), thinking (collapsible), toolCalls (list)
+            this.messages.push({
+                role: 'bot',
+                text: '',
+                thinking: '',
+                toolCalls: [],
+                _streaming: true,
+            });
             const botMsgIdx = this.messages.length - 1;
 
             try {
@@ -134,10 +141,18 @@ createApp({
                             if (dataStr === '[DONE]') continue;
                             try {
                                 const data = JSON.parse(dataStr);
+                                const botMsg = this.messages[botMsgIdx];
                                 if (data.type === 'content') {
-                                    this.messages[botMsgIdx].text += data.text;
+                                    // Final answer text
+                                    botMsg.text += data.text;
+                                } else if (data.type === 'thinking') {
+                                    // Internal reasoning — shown in collapsible section
+                                    botMsg.thinking += data.text;
+                                } else if (data.type === 'tool_call') {
+                                    // Tool invocation record
+                                    botMsg.toolCalls.push({ name: data.name });
                                 } else if (data.type === 'error') {
-                                    this.messages[botMsgIdx].text += '\n\n【错误】' + data.text;
+                                    botMsg.text += '\n\n【错误】' + data.text;
                                 }
                             } catch (_) {}
                         }
@@ -149,11 +164,11 @@ createApp({
                 }
             } finally {
                 this.isStreaming = false;
-                // Clean up streaming flag.
+                // Clean up streaming flag — thinking section will auto-collapse.
                 const botMsg = this.messages[botMsgIdx];
                 if (botMsg) {
                     delete botMsg._streaming;
-                    if (!botMsg.text) botMsg.text = '[空回复]';
+                    if (!botMsg.text && !botMsg.thinking) botMsg.text = '[空回复]';
                 }
                 this.$nextTick(() => this.scrollToBottom());
             }
@@ -273,6 +288,10 @@ createApp({
                     this.loadDocuments();
                 }
             } catch (_) {}
+        },
+
+        hasThinkingContent(msg) {
+            return !!(msg.thinking || (msg.toolCalls && msg.toolCalls.length > 0));
         },
 
         formatSize(bytes) {
