@@ -46,7 +46,11 @@ def _init_langsmith() -> None:
         # Verify connectivity.
         client.list_projects()
         print(f"  ✓ LangSmith 追踪已启用 (项目: {project})")
-        print(f"    查看 trace: https://smith.langchain.com/o/{client._get_tenant_id()}/projects/{project}")
+        try:
+            tenant_id = client._get_tenant_id()
+            print(f"    查看 trace: https://smith.langchain.com/o/{tenant_id}/projects/{project}")
+        except Exception:
+            print(f"    查看 trace: https://smith.langchain.com (项目: {project})")
     except Exception as e:
         print(f"  ⚠ LangSmith 连接失败: {e}")
         print(f"    追踪将继续尝试在后台工作")
