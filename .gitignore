@@ -1,0 +1,25 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.idea/
+
+# Docker volumes
+volumes/
+
+# Model weights
+models/
+
+# BM25 state
+data/bm25_state.json
+
+# Milvus
+data/milvus/
+
+# User uploaded images for chat
+data/user_uploads/
+
+# Agent memory
+agent_memory.db
+agent_memory.db-shm
+agent_memory.db-wal

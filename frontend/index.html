@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MRagAgent — 文化遗产多模态识别助手</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-light.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body>
+    <div id="app" class="app-wrapper">
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon">🏛️</div>
+                <h2>MRagAgent</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <button @click="activePanel = 'chat'" :class="['nav-btn', {active: activePanel === 'chat'}]">
+                    <i class="fas fa-comments"></i> 对话
+                </button>
+                <button @click="activePanel = 'settings'" :class="['nav-btn', {active: activePanel === 'settings'}]">
+                    <i class="fas fa-cog"></i> 文档管理
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <button @click="clearChat" class="danger-btn">
+                    <i class="fas fa-trash-alt"></i> 清空对话
+                </button>
+                <div class="status-badge" :class="{connected: connected}">
+                    <span class="status-dot"></span>
+                    {{ connected ? '已连接' : '未连接' }}
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+
+            <!-- Chat Panel -->
+            <div v-show="activePanel === 'chat'" class="chat-panel">
+                <header class="chat-header">
+                    <h3><i class="fas fa-robot"></i> MRagAgent 对话</h3>
+                    <span class="header-hint">
+                        支持拍照识文物 | 知识库检索 | 上传图片提问
+                    </span>
+                </header>
+
+                <div class="chat-container" ref="chatContainer">
+                    <div v-if="messages.length === 0" class="welcome-screen">
+                        <div class="big-avatar">🏛️</div>
+                        <h3>文化遗产多模态识别助手</h3>
+                        <p>上传文物照片让我识别，或直接提问文化遗产相关问题。</p>
+                        <div class="welcome-hints">
+                            <span>📷 描述照片内容</span>
+                            <span>📚 搜索知识库</span>
+                            <span>🔍 拍照识文物</span>
+                        </div>
+                    </div>
+
+                    <div v-for="(msg, index) in messages" :key="index"
+                         :class="['message', msg.role === 'user' ? 'user-message' : 'bot-message']">
+                        <!-- User image preview -->
+                        <div v-if="msg.image" class="message-image">
+                            <img :src="msg.image" alt="上传图片" />
+                        </div>
+                        <!-- Message content -->
+                        <div class="message-content" v-html="msg.role === 'user' ? escapeHtml(msg.text) : parseMarkdown(msg.text)"></div>
+                        <!-- RAG trace -->
+                        <div v-if="msg.ragTrace" class="message-meta">
+                            <details class="rag-details">
+                                <summary>🔍 检索详情</summary>
+                                <pre class="rag-json">{{ JSON.stringify(msg.ragTrace, null, 2) }}</pre>
+                            </details>
+                        </div>
+                    </div>
+
+                    <!-- Thinking indicator -->
+                    <div v-if="isStreaming" class="message bot-message">
+                        <div class="message-content thinking-content">
+                            <div class="thinking-dots">
+                                <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+                            </div>
+                            <span class="thinking-text">{{ streamText || '思考中...' }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Input area -->
+                <div class="input-area-wrapper">
+                    <!-- Selected image preview -->
+                    <div v-if="selectedImage" class="selected-image-preview">
+                        <img :src="selectedImage" alt="预览" />
+                        <button @click="selectedImage = null; selectedImageFile = null" class="remove-image-btn">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="input-area">
+                        <input type="file" ref="imageInput" @change="handleImageSelect" accept="image/*" style="display:none" />
+                        <button @click="$refs.imageInput.click()" class="attach-btn" title="上传图片">
+                            <i class="fas fa-image"></i>
+                        </button>
+                        <textarea
+                            v-model="userInput"
+                            @keydown="handleKeyDown"
+                            @input="autoResize"
+                            placeholder="输入问题，或上传图片让我识别..."
+                            rows="1"
+                            ref="textarea"
+                        ></textarea>
+                        <button v-if="isStreaming" @click="stopStreaming" class="send-btn stop-btn" title="停止">
+                            <i class="fas fa-stop"></i>
+                        </button>
+                        <button v-else @click="sendMessage" class="send-btn" title="发送" :disabled="!userInput.trim() && !selectedImage">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Panel -->
+            <div v-show="activePanel === 'settings'" class="settings-panel">
+                <div class="settings-header">
+                    <h2><i class="fas fa-cog"></i> 文档管理</h2>
+                    <p>上传 PDF 或 Word 文档，系统自动提取文字和图片并建立索引</p>
+                </div>
+
+                <div class="upload-section">
+                    <h3><i class="fas fa-upload"></i> 上传文档</h3>
+                    <div class="upload-area">
+                        <input type="file" ref="docInput" @change="handleDocSelect" accept=".pdf,.doc,.docx" style="display:none" />
+                        <button @click="$refs.docInput.click()" class="upload-btn">
+                            <i class="fas fa-cloud-upload-alt"></i> 选择文件
+                        </button>
+                        <div v-if="selectedDoc" class="selected-file">
+                            <i class="fas fa-file"></i> {{ selectedDoc.name }}
+                            <label class="llm-naming-label">
+                                <input type="checkbox" v-model="useLLMNaming" /> LLM 命名图片
+                            </label>
+                            <button @click="uploadDocument" class="btn-primary" :disabled="isUploading">
+                                <i class="fas fa-upload"></i> {{ isUploading ? '处理中...' : '开始处理' }}
+                            </button>
+                        </div>
+                        <div v-if="uploadStatus" class="upload-status" :class="uploadStatus.type">
+                            {{ uploadStatus.text }}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="documents-section">
+                    <h3><i class="fas fa-list"></i> 已处理文档</h3>
+                    <button @click="loadDocuments" class="btn-secondary">
+                        <i class="fas fa-sync"></i> 刷新
+                    </button>
+                    <div v-if="documentsLoading" class="loading">加载中...</div>
+                    <div v-else-if="documents.length === 0" class="empty">
+                        <i class="fas fa-inbox"></i><p>暂无文档</p>
+                    </div>
+                    <div v-else class="documents-list">
+                        <div v-for="doc in documents" :key="doc.filename" class="document-item">
+                            <div class="document-info">
+                                <i :class="doc.type === '.PDF' ? 'fas fa-file-pdf' : 'fas fa-file-word'"></i>
+                                <span class="document-name">{{ doc.filename }}</span>
+                                <span class="document-size">{{ formatSize(doc.size) }}</span>
+                            </div>
+                            <button @click="deleteDocument(doc.filename)" class="btn-danger btn-sm">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
