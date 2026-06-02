@@ -143,17 +143,33 @@
                 <div class="upload-section">
                     <h3><i class="fas fa-upload"></i> 上传文档</h3>
                     <div class="upload-area">
-                        <input type="file" ref="docInput" @change="handleDocSelect" accept=".pdf,.doc,.docx" style="display:none" />
+                        <input type="file" ref="docInput" @change="handleDocSelect" accept=".pdf,.doc,.docx" multiple style="display:none" />
                         <button @click="$refs.docInput.click()" class="upload-btn">
                             <i class="fas fa-cloud-upload-alt"></i> 选择文件
                         </button>
-                        <div v-if="selectedDoc" class="selected-file">
-                            <i class="fas fa-file"></i> {{ selectedDoc.name }}
+                        <div v-if="selectedDocs.length > 0" class="selected-files-list">
+                            <div v-for="(doc, index) in selectedDocs" :key="doc.name + index" class="file-item"
+                                 :class="{ success: uploadResults[index] && uploadResults[index].status === 'success',
+                                           error: uploadResults[index] && uploadResults[index].status === 'error' }">
+                                <i class="fas fa-file"></i>
+                                <span class="file-name" :title="doc.name">{{ doc.name }}</span>
+                                <span class="file-size">{{ formatSize(doc.size) }}</span>
+                                <i v-if="uploadResults[index] && uploadResults[index].status === 'success'"
+                                   class="fas fa-check-circle status-icon-success"></i>
+                                <i v-else-if="uploadResults[index] && uploadResults[index].status === 'error'"
+                                   class="fas fa-times-circle status-icon-error"
+                                   :title="uploadResults[index].message"></i>
+                                <button v-if="!isUploading"
+                                        @click="removeSelectedDoc(index)" class="remove-file-btn">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
                             <label class="llm-naming-label">
                                 <input type="checkbox" v-model="useLLMNaming" /> LLM 命名图片
                             </label>
                             <button @click="uploadDocument" class="btn-primary" :disabled="isUploading">
-                                <i class="fas fa-upload"></i> {{ isUploading ? '处理中...' : '开始处理' }}
+                                <i class="fas fa-upload"></i>
+                                {{ isUploading ? '处理中...' : '开始处理 (' + selectedDocs.length + ' 个文件)' }}
                             </button>
                         </div>
                         <div v-if="uploadStatus" class="upload-status" :class="uploadStatus.type">

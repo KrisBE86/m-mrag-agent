@@ -36,12 +36,15 @@ _async_agent = None
 # 当前固定 thread_id（单用户测试）。
 DEFAULT_CONFIG = {"configurable": {"thread_id": "main-chat"}}
 
+# Redis 上下文记忆 key 前缀
+CONTEXT_KEY = "mragagent:context:main-chat"
 
-def _get_async_agent():
+
+async def _get_async_agent():
     """延迟初始化异步 agent。必须在事件循环内调用。"""
     global _async_agent
     if _async_agent is None:
-        _async_agent = build_agent_async()
+        _async_agent = await build_agent_async()
     return _async_agent
 
 
@@ -68,8 +71,8 @@ def _sse_event(data: dict) -> str:
 def _build_user_message(text: str, image_path: str | None = None) -> str:
     """构造发送给 Agent 的用户消息。
 
-    以中性方式传递图片路径（作为上下文信息），而不是给 Agent 下"请识别"指令。
-    让 Agent 根据对话历史和问题内容自行判断是否需要调用识图工具。
+    以中性标记传递图片路径（纯上下文），不给 Agent 下指令。
+    用户的文字提问是唯一的行动依据——Agent 根据文字内容自行判断是否需要识图。
     """
     if not image_path:
         return text or "你好"
@@ -107,7 +110,7 @@ async def chat_stream(
       - 流结束时，剩余缓冲文本即为最终回答，
         作为 "content" 发出。
     """
-    agent = _get_async_agent()
+    agent = await _get_async_agent()
     cfg = config or DEFAULT_CONFIG
 
     content = _build_user_message(user_message, image_path)

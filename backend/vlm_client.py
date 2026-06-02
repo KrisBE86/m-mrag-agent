@@ -69,5 +69,6 @@ def describe_image_with_vlm(image_bytes: bytes) -> str:
         content = resp.choices[0].message.content
         return content.strip() if content else ""
 
-    except Exception:
+    except Exception as e:
+        print(f"[VLM] 豆包视觉模型调用失败: {type(e).__name__}: {e}")
         return ""

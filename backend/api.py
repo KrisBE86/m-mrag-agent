@@ -25,6 +25,36 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _cleanup_old_document_data(filename: str) -> None:
+    """清理文档在 Milvus、BM25 和 PostgreSQL 中的旧数据。
+
+    用于重新上传和删除文档时，确保旧索引数据被完全清除。
+    """
+    from backend.milvus_client import milvus_manager
+    from backend.embedding import bm25
+    from backend.parent_chunk_store import parent_chunk_store
+
+    filter_expr = f'filename == "{filename}"'
+    try:
+        # 移除 BM25 统计信息。
+        rows = milvus_manager.query(
+            collection=milvus_manager.text_collection,
+            filter_expr=filter_expr,
+            output_fields=["text"],
+            limit=10000,
+        )
+        texts = [r.get("text") or "" for r in rows]
+        if texts:
+            bm25.increment_remove_documents(texts)
+
+        milvus_manager.delete(milvus_manager.text_collection, filter_expr)
+        milvus_manager.delete(milvus_manager.image_collection, filter_expr)
+        parent_chunk_store.delete_by_filename(filename)
+        print(f"  ♻ 已清理旧数据: {filename}")
+    except Exception as e:
+        print(f"  ⚠ 清理旧数据时出错: {e}")
+
+
 # ── 请求/响应模型 ──────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -71,62 +101,67 @@ async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)
 
 @router.post("/documents/upload")
 async def upload_document(
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     use_llm_naming: bool = False,
     _: bool = Depends(verify_admin),
 ):
-    """上传并录入文档（PDF/Word）。"""
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="文件名不能为空")
+    """上传并录入文档（PDF/Word），支持批量上传。"""
+    if not files:
+        raise HTTPException(status_code=400, detail="未选择任何文件")
 
-    file_lower = file.filename.lower()
-    if not (file_lower.endswith(".pdf") or file_lower.endswith((".docx", ".doc"))):
-        raise HTTPException(status_code=400, detail="仅支持 PDF 和 Word 文件")
+    results = []
 
-    # 保存上传的文件。
-    safe_name = Path(file.filename).name
-    file_path = UPLOAD_DIR / safe_name
-    content = await file.read()
+    for file in files:
+        filename = file.filename
+        if not filename:
+            results.append({"filename": "(未知)", "status": "error", "message": "文件名为空"})
+            continue
 
-    # 检查重复 — 如果是重新上传，先清理旧数据。
-    is_reupload = file_path.exists()
-    if is_reupload:
-        from backend.milvus_client import milvus_manager
-        from backend.embedding import bm25
-        from backend.parent_chunk_store import parent_chunk_store
+        # 验证文件类型。
+        file_lower = filename.lower()
+        if not (file_lower.endswith(".pdf") or file_lower.endswith((".docx", ".doc"))):
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "message": f"不支持的文件类型: {Path(filename).suffix}",
+            })
+            continue
 
-        filter_expr = f'filename == "{safe_name}"'
+        # 保存上传的文件。
+        safe_name = Path(filename).name
+        file_path = UPLOAD_DIR / safe_name
+        content = await file.read()
+
+        # 检查重复 — 如果是重新上传，先清理旧数据。
+        if file_path.exists():
+            _cleanup_old_document_data(safe_name)
+
+        file_path.write_bytes(content)
+
+        # 录入系统。
         try:
-            # 移除 BM25 统计信息。
-            rows = milvus_manager.query(
-                collection=milvus_manager.text_collection,
-                filter_expr=filter_expr,
-                output_fields=["text"],
-                limit=10000,
-            )
-            texts = [r.get("text") or "" for r in rows]
-            if texts:
-                bm25.increment_remove_documents(texts)
-
-            milvus_manager.delete(milvus_manager.text_collection, filter_expr)
-            milvus_manager.delete(milvus_manager.image_collection, filter_expr)
-            parent_chunk_store.delete_by_filename(safe_name)
-            print(f"  ♻ 已清理旧数据: {safe_name}")
+            ingest_document(str(file_path), use_llm_naming=use_llm_naming)
+            results.append({
+                "filename": safe_name,
+                "status": "success",
+                "message": f"文档 {safe_name} 已成功处理",
+            })
         except Exception as e:
-            print(f"  ⚠ 清理旧数据时出错: {e}")
+            results.append({
+                "filename": safe_name,
+                "status": "error",
+                "message": f"文档处理失败: {str(e)}",
+            })
 
-    file_path.write_bytes(content)
-
-    # 录入系统。
-    try:
-        ingest_document(str(file_path), use_llm_naming=use_llm_naming)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+    # 汇总结果。
+    all_success = all(r["status"] == "success" for r in results)
+    success_count = sum(1 for r in results if r["status"] == "success")
+    fail_count = len(results) - success_count
 
     return {
-        "status": "ok",
-        "filename": safe_name,
-        "message": f"文档 {safe_name} 已成功处理",
+        "status": "ok" if all_success else "partial",
+        "results": results,
+        "summary": f"成功 {success_count}/{len(results)}" + (f"，失败 {fail_count}" if fail_count else ""),
     }
 
 
@@ -148,35 +183,12 @@ async def list_documents(_: bool = Depends(verify_admin)):
 @router.delete("/documents/{filename}")
 async def delete_document(filename: str, _: bool = Depends(verify_admin)):
     """删除已上传的文档及其在 Milvus 和 PostgreSQL 中的所有数据块。"""
-    from backend.milvus_client import milvus_manager
-    from backend.embedding import bm25
-    from backend.parent_chunk_store import parent_chunk_store
-
     file_path = UPLOAD_DIR / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    # 从 Milvus 中删除（两个集合）。
-    filter_expr = f'filename == "{filename}"'
     try:
-        # 移除文本块的 BM25 统计信息。
-        rows = milvus_manager.query(
-            collection=milvus_manager.text_collection,
-            filter_expr=filter_expr,
-            output_fields=["text"],
-            limit=10000,
-        )
-        texts = [r.get("text") or "" for r in rows]
-        if texts:
-            bm25.increment_remove_documents(texts)
-
-        milvus_manager.delete(milvus_manager.text_collection, filter_expr)
-        milvus_manager.delete(milvus_manager.image_collection, filter_expr)
-
-        # 从 PostgreSQL 中删除。
-        parent_chunk_store.delete_by_filename(filename)
-
-        # 删除文件。
+        _cleanup_old_document_data(filename)
         file_path.unlink()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")

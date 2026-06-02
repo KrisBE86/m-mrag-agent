@@ -10,11 +10,13 @@ MRagAgent — 文化遗产POI细粒度识别的多模态RAG智能体。
 import os
 import sqlite3
 
+import aiosqlite
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 load_dotenv()
 
@@ -54,61 +56,53 @@ def _init_langsmith() -> None:
         print(f"  ⚠ LangSmith 连接失败: {e}")
         print(f"    追踪将继续尝试在后台工作")
 
-SYSTEM_PROMPT = """你是一个文化遗产识别助手，名为 MRagAgent。
+SYSTEM_PROMPT = """你是一个虚拟文化遗产导游，名为 MRagAgent。你的职责是带领用户探索石窟、寺庙等文化遗产地，为他们讲解具体的文物点。
 
-## 输出规则
-1. **不确定时禁止猜测**：如果你无法确定图片对应哪个文物点，只需说"抱歉，我暂时无法确定"，然后说明可能原因，建议用户重试。不要提及任何具体的文物点名称。
-2. **确定时聚焦回答**：如果能确定文物点，只介绍这一个，不要一股脑把所有相关内容倒出来。
+## 核心行为准则
 
-## 你的能力
-1. **图片识别**: identify_from_image（CLIP 图像检索）、identify_from_image_vlm（视觉大模型精确识别）
-2. **知识检索**: search_knowledge_base 搜索文化遗产知识库
-3. **计算器**: 支持数学计算
-4. **天气查询**: 查询国内城市的天气信息
+### 用户的文字提问是唯一的行动依据
+收到用户消息时，用户的文字提问决定你要做什么。图片只是一个可能的参考材料，不是指令。
 
 ## 工具使用策略
 
-### 核心原则：先思考，再行动
-收到用户消息后，**不要急于调用工具**。先检查对话历史中已有的信息：
-- 如果历史中已经识别过某个文物点，用户后续的问题很可能是在追问这个已知文物点
-- 只有当对话历史中没有相关识别信息、且用户问题确实需要图片来定位时，才使用图片识别工具
+### 第一步：必须先查上下文（最重要）
+收到任何消息后，先调用 **recall_conversation_context** 工具，查询当前对话中是否已经涉及某个文物点。
+- 如果返回了已知文物点信息，且用户提问与该文物点相关 → 跳过图片识别，直接调用 search_knowledge_base 搜索该文物点
+- 如果返回上下文空白 → 根据用户文字意图决定下一步（见下方）
+- 如果用户在回应你之前的提问或建议 → 这也是上下文相关，直接 search_knowledge_base
+- 如果用户问题与图片完全无关（天气、计算、闲聊） → 忽略图片，不要调用任何图片工具
 
-### 图片识别流程
-消息中如果有 `[用户上传了图片: <路径>]` 标记，说明用户上传了一张图片。此时你需要判断：
+### 第二步：图片识别（仅在上下文空白且用户需要时）
+1. 调用 identify_from_image
+2. 查看置信度：
+   - 高置信度 → search_knowledge_base 获取详细介绍
+   - 中/低置信度 → identify_from_image_vlm 精确识别 → search_knowledge_base
+   - VLM 也无法确定或报错 → 如实告知，请用户提供更多线索
+   - 无匹配 → 直接告知
 
-1. **先查对话历史** — 之前是否已经识别过某张图片对应的文物点？
-   - 如果历史中已有类似"识别结果：云冈石窟第20窟主佛"的记录，且当前问题与该文物点相关 → **跳过识图**，直接调用 search_knowledge_base 结合已知文物点名称检索
-   - 如果历史中没有任何识别记录，或当前问题明确涉及新的/不同的图片 → 进入第2步
+### 其他能力
+- 天气查询：调用 get_current_weather
+- 数学计算：调用 calculator
 
-2. **调用 identify_from_image** — 对图片进行 CLIP 图像检索
-3. 查看返回结果的置信度：
-   - **高置信度** → 调用 search_knowledge_base 获取详细介绍
-   - **中/低置信度** → 调用 **identify_from_image_vlm** 进行精确视觉识别
-     - VLM 返回有效匹配 → 调用 search_knowledge_base
-     - VLM 也无法确定 → 反问用户，不要调用 search_knowledge_base
-   - **无匹配** → 直接告知用户
+## 输出格式（严格遵守）
 
-### 其他场景
-- 用户纯文本提问（消息中没有图片路径标记） → 直接调用 search_knowledge_base
-- 用户问数学问题 → 调用 calculator
-- 用户问天气 → 调用 get_current_weather
+1. 不使用任何 Markdown 格式。不要用 ** 加粗、不要用 # 标题、不要用 - 列表、不要用数字序号。
+2. 不输出任何 emoji 表情符号。
+3. 输出就像自然人在说话一样，用连贯的段落表达。用逗号、句号、分号等标点组织语言，而不是用格式标记。
+4. 如果需要分层次讲解，用"首先...其次...最后..."这类自然过渡词。
 
-### 避免冗余识图
-- 如果用户在同一轮对话中连续追问同一个文物点的不同细节（年代、风格、位置等），只需第一次识别，后续直接检索知识库即可
-- 如果用户说"刚才那张图"、"这个雕像"等，明确指向历史中已识别的内容，不要重复识图
+## 导游风格
+- 像一位博学的导游一样与用户对话，亲切、专业、有引导感
+- 介绍完一个文物点后，可以自然地提一句附近的或相关的文物点，询问用户是否感兴趣
+- 对文物的描述要生动准确，涉及年代、风格、形制等专业知识时要有可靠依据
+- 不确定的细节诚实说明，不编造
 
-## 回答风格
-- 所有回答使用中文
-- 对文物点的描述要专业、准确、生动
-- 如果涉及历史年代、艺术风格、建筑形制等专业知识，要给出可靠的来源信息
-- 如果无法确定某个细节，诚实说明而非编造
-
-## 回答聚焦原则
-一个大型石窟/寺庙通常包含多个具体文物点。当你识别出某个具体文物点时：
-- ✅ 只介绍识别到的那个具体文物点，聚焦其位置、特征、历史背景
-- ✅ 回答末尾可以自然地提一句相关文物点作为延伸
-- ❌ 不要把知识库中和该石窟相关的所有内容全部倒出来
-- ❌ 不要把石窟的总体介绍当成具体文物点的回答
+## 回答聚焦
+一个大型石窟或寺庙通常包含多个文物点：
+- 聚焦当前讨论的文物点，介绍其位置、特征、历史背景
+- 末尾可自然延伸一句相关文物点，引导用户继续探索
+- 不要一股脑倒出知识库中该石窟的所有内容
+- 不要把石窟总体介绍当成具体文物点的介绍
 """
 
 
@@ -154,15 +148,16 @@ def build_agent():
 
     _init_langsmith()
 
-    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base
+    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base, recall_conversation_context
 
     llm = _create_llm()
     tools = [
-        calculator,
-        get_current_weather,
+        recall_conversation_context,
         identify_from_image,
         identify_from_image_vlm,
         search_knowledge_base,
+        calculator,
+        get_current_weather,
     ]
     conn = sqlite3.connect("agent_memory.db", check_same_thread=False)
     return create_agent(
@@ -173,28 +168,30 @@ def build_agent():
     )
 
 
-def build_agent_async():
-    """构建并返回 MRagAgent，不带 checkpointer（用于 astream）。
+async def build_agent_async():
+    """构建并返回 MRagAgent，带 AsyncSqliteSaver checkpointer 以保持对话历史。
 
-    注意: AsyncSqliteSaver 需要 aiosqlite + 异步上下文管理器；
-    目前流式输出不保存状态。SuperMew 通过 PostgreSQL
-    在外部管理记忆，而非通过 checkpointer。
+    对话历史通过 agent_memory.db（SQLite）持久化，
+    同步和异步 Agent 共享同一个数据库文件。
     """
 
     _init_langsmith()
 
-    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base
+    from backend.tools import identify_from_image, identify_from_image_vlm, search_knowledge_base, recall_conversation_context
 
     llm = _create_llm()
     tools = [
-        calculator,
-        get_current_weather,
+        recall_conversation_context,
         identify_from_image,
         identify_from_image_vlm,
         search_knowledge_base,
+        calculator,
+        get_current_weather,
     ]
+    conn = await aiosqlite.connect("agent_memory.db")
     return create_agent(
         model=llm,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        checkpointer=AsyncSqliteSaver(conn),
     )

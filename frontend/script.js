@@ -16,7 +16,8 @@ createApp({
             // Document management
             documents: [],
             documentsLoading: false,
-            selectedDoc: null,
+            selectedDocs: [],
+            uploadResults: [],
             isUploading: false,
             useLLMNaming: false,
             uploadStatus: null,
@@ -227,17 +228,50 @@ createApp({
         // ── Document management ──────────────────────────────────
 
         handleDocSelect(e) {
-            this.selectedDoc = e.target.files[0];
+            // 将新选择的文件追加到已有列表，按文件名去重。
+            const newFiles = Array.from(e.target.files);
+            const skipped = [];
+            for (const f of newFiles) {
+                // 前端大小限制：单文件 ≤ 100MB。
+                if (f.size > 100 * 1024 * 1024) {
+                    skipped.push(`${f.name} (超过100MB)`);
+                    continue;
+                }
+                if (this.selectedDocs.some(d => d.name === f.name)) {
+                    skipped.push(f.name);
+                    continue;
+                }
+                this.selectedDocs.push(f);
+            }
+            if (skipped.length > 0) {
+                this.uploadStatus = {
+                    type: 'error',
+                    text: '已跳过重复或过大的文件: ' + skipped.join(', '),
+                };
+            } else {
+                this.uploadStatus = null;
+            }
+            this.uploadResults = [];
+            // 清空 input，允许再次选择同一文件。
+            e.target.value = '';
+        },
+
+        removeSelectedDoc(index) {
+            this.selectedDocs.splice(index, 1);
+            this.uploadResults = [];
             this.uploadStatus = null;
         },
 
         async uploadDocument() {
-            if (!this.selectedDoc) return;
+            if (this.selectedDocs.length === 0) return;
             this.isUploading = true;
             this.uploadStatus = null;
+            this.uploadResults = [];
 
             const formData = new FormData();
-            formData.append('file', this.selectedDoc);
+            for (const doc of this.selectedDocs) {
+                formData.append('files', doc);
+            }
             if (this.useLLMNaming) {
                 formData.append('use_llm_naming', 'true');
             }
@@ -250,8 +284,16 @@ createApp({
                 });
                 const result = await response.json();
                 if (response.ok) {
-                    this.uploadStatus = { type: 'success', text: result.message };
-                    this.selectedDoc = null;
+                    this.uploadResults = result.results || [];
+                    const failedCount = this.uploadResults.filter(r => r.status === 'error').length;
+                    if (failedCount === 0) {
+                        this.uploadStatus = { type: 'success', text: result.summary };
+                        this.selectedDocs = [];
+                    } else if (failedCount === this.uploadResults.length) {
+                        this.uploadStatus = { type: 'error', text: result.summary };
+                    } else {
+                        this.uploadStatus = { type: 'error', text: result.summary };
+                    }
                     this.loadDocuments();
                 } else {
                     this.uploadStatus = { type: 'error', text: result.detail || '上传失败' };
