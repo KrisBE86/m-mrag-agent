@@ -1,8 +1,8 @@
 """
-PostgreSQL database connection management.
-- SQLAlchemy engine + SessionLocal factory, aligned with SuperMew pattern.
-- init_db() creates tables on startup.
-- pool_pre_ping=True ensures connections are alive after idle periods.
+PostgreSQL 数据库连接管理。
+- SQLAlchemy 引擎 + SessionLocal 工厂，对齐 SuperMew 模式。
+- init_db() 在启动时创建表。
+- pool_pre_ping=True 确保空闲后连接仍存活。
 """
 
 import os
@@ -24,7 +24,7 @@ Base = declarative_base()
 
 
 def init_db() -> None:
-    """Create all tables. Delayed import avoids circular dependency."""
-    import backend.models  # noqa: F401
+    """创建所有表。延迟导入避免循环依赖。"""
+    import backend.models  # noqa: F401（忽略未使用导入警告）
 
     Base.metadata.create_all(bind=engine)

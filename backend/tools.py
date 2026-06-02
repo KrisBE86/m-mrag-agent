@@ -1,16 +1,16 @@
 """
-LangChain @tool functions for the MRagAgent.
+MRagAgent 的 LangChain @tool 函数。
 
-Three tools:
-  1. identify_from_image — CLIP image search → POI text description
-  2. identify_from_image_vlm — Doubao Vision description → text retrieval
-  3. search_knowledge_base — Hybrid text RAG (BGE-M3 + BM25 + auto-merge)
+三个工具：
+  1. identify_from_image — CLIP 图像搜索 → 文物点文字描述
+  2. identify_from_image_vlm — 豆包视觉描述 → 文本检索
+  3. search_knowledge_base — 混合文本 RAG（BGE-M3 + BM25 + 自动合并）
 
-Agent routes autonomously:
-  - Image + question → identify_from_image (fast)
-    → if results ambiguous (low confidence) → identify_from_image_vlm (precise)
+Agent 自主路由逻辑：
+  - 图片 + 问题 → identify_from_image（快速）
+    → 如果结果模糊（置信度低） → identify_from_image_vlm（精确）
     → search_knowledge_base
-  - Text-only → search_knowledge_base
+  - 纯文本 → search_knowledge_base
 """
 
 from langchain_core.tools import tool

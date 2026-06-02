@@ -1,9 +1,9 @@
 """
-Redis cache wrapper.
-- JSON object read/write with auto serialization/deserialization.
-- Namespaced keys with configurable TTL.
-- Global singleton `cache` for module-level access.
-- Aligned with SuperMew's cache.py pattern.
+Redis 缓存封装。
+- JSON 对象读写，自动序列化/反序列化。
+- 带命名空间的 key，支持可配置 TTL。
+- 全局单例 `cache`，供模块级直接访问。
+- 对齐 SuperMew 的 cache.py 模式。
 """
 
 import json
@@ -14,7 +14,7 @@ import redis
 
 
 class RedisCache:
-    """Redis cache with JSON serialization and key prefix namespacing."""
+    """Redis 缓存，支持 JSON 序列化和 key 前缀命名空间。"""
 
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
@@ -31,7 +31,7 @@ class RedisCache:
         return f"{self.key_prefix}:{key}"
 
     def get_json(self, key: str) -> Optional[Any]:
-        """Get a JSON value by key. Returns None on any error."""
+        """按 key 获取 JSON 值。任何异常返回 None。"""
         try:
             value = self._get_client().get(self._key(key))
             if not value:
@@ -41,7 +41,7 @@ class RedisCache:
             return None
 
     def set_json(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set a JSON value with optional TTL override."""
+        """设置 JSON 值，可选覆盖 TTL。"""
         try:
             payload = json.dumps(value, ensure_ascii=False)
             self._get_client().setex(self._key(key), ttl or self.default_ttl, payload)
@@ -49,14 +49,14 @@ class RedisCache:
             return
 
     def delete(self, key: str) -> None:
-        """Delete a key."""
+        """删除一个 key。"""
         try:
             self._get_client().delete(self._key(key))
         except Exception:
             return
 
     def delete_pattern(self, pattern: str) -> None:
-        """Delete all keys matching a glob pattern under the namespace."""
+        """删除命名空间下所有匹配 glob 模式的 key。"""
         try:
             full_pattern = self._key(pattern)
             keys = self._get_client().keys(full_pattern)
@@ -66,5 +66,5 @@ class RedisCache:
             return
 
 
-# Module-level singleton for shared access.
+# 模块级单例，供全局共享访问。
 cache = RedisCache()

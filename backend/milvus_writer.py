@@ -1,9 +1,9 @@
 """
-Batch writer for dual Milvus collections.
+双 Milvus Collection 的批量写入器。
 
-- write_image_pois(): embed reference images with Chinese-CLIP → insert to image_poi_collection.
-- write_text_chunks(): embed L3 text with BGE-M3 + BM25 → insert to text_chunk_collection.
-  Aligned with SuperMew's MilvusWriter pattern.
+- write_image_pois()：用 Chinese-CLIP 编码参考图像 → 插入 image_poi_collection。
+- write_text_chunks()：用 BGE-M3 + BM25 编码 L3 文本 → 插入 text_chunk_collection。
+  对齐 SuperMew 的 MilvusWriter 模式。
 """
 
 from typing import Callable, Optional
@@ -13,7 +13,7 @@ from backend.milvus_client import milvus_manager
 
 
 class MilvusWriter:
-    """Batch writer for both image POI and text chunk collections."""
+    """图像 POI 和文本块 collection 的批量写入器。"""
 
     def __init__(self):
         self._clip = clip_embeddings
@@ -21,7 +21,7 @@ class MilvusWriter:
         self._bm25 = bm25
         self._milvus = milvus_manager
 
-    # ── Image POI Collection (Collection 1) ──────────────────────
+    # ── 图像 POI Collection（Collection 1）──────────────────────
 
     def write_image_pois(
         self,
@@ -30,9 +30,9 @@ class MilvusWriter:
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> None:
         """
-        Embed reference images with Chinese-CLIP and write to image_poi_collection.
+        用 Chinese-CLIP 编码参考图像并写入 image_poi_collection。
 
-        Each item in image_pois should have:
+        image_pois 中每个元素应包含：
             chunk_id, image_path, poi_name, site, cave,
             poi_description, distinguishing_features, tags
         """
@@ -67,7 +67,7 @@ class MilvusWriter:
                 processed = min(i + batch_size, total)
                 progress_callback(processed, total)
 
-    # ── Text Chunk Collection (Collection 2, aligned w/ SuperMew) ─
+    # ── 文本块 Collection（Collection 2，对齐 SuperMew）─────────
 
     def write_text_chunks(
         self,
@@ -76,10 +76,10 @@ class MilvusWriter:
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> None:
         """
-        Embed L3 text chunks with BGE-M3 (dense) + BM25 (sparse) and write to
-        text_chunk_collection. Incrementally updates BM25 statistics.
+        用 BGE-M3（稠密）+ BM25（稀疏）编码 L3 文本块，写入
+        text_chunk_collection。增量更新 BM25 统计。
 
-        Each document dict should have:
+        每个文档字典应包含：
             text, filename, file_type, file_path, page_number, chunk_idx,
             chunk_id, parent_chunk_id, root_chunk_id, chunk_level,
             site, cave, poi_name
@@ -89,7 +89,7 @@ class MilvusWriter:
 
         self._milvus.init_text_collection(dense_dim=self._bge.dimension)
 
-        # Sync BM25 statistics before writing (aligned with SuperMew).
+        # 写入前同步 BM25 统计（对齐 SuperMew）。
         all_texts = [doc["text"] for doc in documents]
         self._bm25.increment_add_documents(all_texts)
 
@@ -129,5 +129,5 @@ class MilvusWriter:
                 progress_callback(processed, total)
 
 
-# Module-level singleton.
+# 模块级单例。
 milvus_writer = MilvusWriter()

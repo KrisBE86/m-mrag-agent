@@ -1,16 +1,16 @@
 """
-Document loading with image extraction and three-level hierarchical chunking.
+文档加载，包含图片提取和三级层次分块。
 
-- Supports PDF (PyMuPDF for image extraction + PyPDFLoader for text) and Word
-  (python-docx for image extraction + Docx2txtLoader for text).
-- Three-level sliding-window chunking (aligned with SuperMew):
-    L1 ≈ 1200 chars (coarse overview)
-    L2 ≈ 600 chars  (medium paragraph)
-    L3 ≈ 300 chars  (fine leaf, the retrieval unit)
-- Image extraction: extracts embedded images from each page/section, detects
-  captions (e.g. "图1. xxx"), or uses LLM to generate descriptive names.
-- Each extracted image is linked to its nearest L3 text chunk via chunk_id.
-- Chunk ID format: {filename}::p{page}::l{level}::{index}
+- 支持 PDF（PyMuPDF 提取图片 + PyPDFLoader 提取文本）和 Word
+  （python-docx 提取图片 + Docx2txtLoader 提取文本）。
+- 三级滑动窗口分块（对齐 SuperMew）：
+    L1 ≈ 1200 字符（粗略概述）
+    L2 ≈ 600 字符（中等段落）
+    L3 ≈ 300 字符（精细叶子节点，检索单元）
+- 图片提取：从每页/每节提取嵌入图片，检测题注（如 "图1. xxx"），
+  或使用 LLM 生成描述性名称。
+- 每张提取的图片通过 chunk_id 关联到最近的 L3 文本块。
+- 块 ID 格式：{filename}::p{page}::l{level}::{index}
 """
 
 import base64
@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# ── Caption detection patterns ───────────────────────────────────
+# ── 题注检测模式 ───────────────────────────────────
 
 CAPTION_PATTERNS = [
     re.compile(r"图\s*(\d+)[\.\、\s]+(.+?)(?:\n|图\s*\d+|$)", re.DOTALL),
@@ -34,7 +34,7 @@ CAPTION_PATTERNS = [
 
 
 def _extract_captions(text: str) -> dict[int, str]:
-    """Find all image captions in text. Returns {figure_number: caption_text}."""
+    """在文本中查找所有图片题注。返回 {图片编号: 题注文本}。"""
     captions: dict[int, str] = {}
     for pattern in CAPTION_PATTERNS:
         for match in pattern.finditer(text):
@@ -46,16 +46,16 @@ def _extract_captions(text: str) -> dict[int, str]:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Image extraction
+# 图片提取
 # ═══════════════════════════════════════════════════════════════════
 
 def _extract_images_from_pdf(file_path: str) -> list[dict]:
     """
-    Extract embedded images from a PDF file using PyMuPDF (fitz).
-    Returns list of {page_number, image_index, image_bytes, format}.
+    使用 PyMuPDF (fitz) 从 PDF 文件中提取嵌入图片。
+    返回 {page_number, image_index, image_bytes, format} 列表。
     """
     try:
-        import fitz  # PyMuPDF
+        import fitz  # PyMuPDF 库
     except ImportError:
         print("  ⚠ PyMuPDF not installed. Install: pip install pymupdf")
         return []
@@ -72,7 +72,7 @@ def _extract_images_from_pdf(file_path: str) -> list[dict]:
                 image_bytes = base_image["image"]
                 ext = base_image.get("ext", "png")
                 images.append({
-                    "page_number": page_num + 1,  # 1-indexed
+                    "page_number": page_num + 1,  # 页码从 1 开始
                     "image_index": img_idx,
                     "image_bytes": image_bytes,
                     "format": ext,
@@ -85,8 +85,8 @@ def _extract_images_from_pdf(file_path: str) -> list[dict]:
 
 def _extract_images_from_docx(file_path: str) -> list[dict]:
     """
-    Extract embedded images from a Word document using python-docx.
-    Returns list of {paragraph_index, image_index, image_bytes, format}.
+    使用 python-docx 从 Word 文档中提取嵌入图片。
+    返回 {paragraph_index, image_index, image_bytes, format} 列表。
     """
     try:
         from docx import Document
@@ -98,20 +98,20 @@ def _extract_images_from_docx(file_path: str) -> list[dict]:
     images = []
     doc = Document(file_path)
 
-    # Extract images from the document's relationships.
+    # 从文档的关系数据中提取图片。
     img_counter = 0
     for rel in doc.part.rels.values():
         if "image" not in rel.reltype:
             continue
         try:
             image_bytes = rel.target_part.blob
-            # Get extension from target_ref (e.g. "media/image1.png")
-            # ImagePart.ext was removed in newer python-docx versions
+            # 从 target_ref 获取扩展名（如 "media/image1.png"）
+            # ImagePart.ext 在较新版本的 python-docx 中已被移除
             import os as _os
             _, ext = _os.path.splitext(rel.target_ref)
             ext = (ext or ".png").lstrip(".")
             images.append({
-                "page_number": 0,  # Word doesn't have pages; will associate by paragraph
+                "page_number": 0,  # Word 没有页码概念；将按段落关联
                 "image_index": img_counter,
                 "image_bytes": image_bytes,
                 "format": ext,
@@ -124,7 +124,7 @@ def _extract_images_from_docx(file_path: str) -> list[dict]:
 
 
 def _save_image(image_bytes: bytes, output_dir: str | Path, filename: str, img_index: int, fmt: str) -> str:
-    """Save an extracted image to disk and return the relative path."""
+    """将提取的图片保存到磁盘并返回相对路径。"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_filename = re.sub(r"[^\w\-\.]", "_", filename)
@@ -135,7 +135,7 @@ def _save_image(image_bytes: bytes, output_dir: str | Path, filename: str, img_i
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Image naming (caption detection + LLM fallback)
+# 图片命名（题注检测 + LLM 回退）
 # ═══════════════════════════════════════════════════════════════════
 
 def _name_image_from_captions(
@@ -145,16 +145,16 @@ def _name_image_from_captions(
     captions: dict[int, str],
 ) -> tuple[str, str]:
     """
-    Try to name an image from detected captions.
-    Returns (name, caption_text) — caption_text may be empty.
+    尝试根据检测到的题注为图片命名。
+    返回 (名称, 题注文本) — 题注文本可能为空。
     """
-    # Simple heuristic: image_index on a page maps to figure number.
+    # 简单启发式：页面上的图片索引对应图片编号。
     figure_num = image_index + 1
     if figure_num in captions:
         caption = captions[figure_num]
         return caption, caption
 
-    # Fallback: use page-level context.
+    # 回退：使用页面级上下文。
     if page_text.strip():
         first_line = page_text.strip().split("\n")[0][:100]
         return first_line, ""
@@ -168,8 +168,8 @@ def _name_image_with_llm(
     page_number: int,
 ) -> str:
     """
-    Use LLM (DeepSeek) to generate a descriptive name for an image.
-    Sends the image as base64 data URI with surrounding page text for context.
+    使用 LLM (DeepSeek) 为图片生成描述性名称。
+    将图片以 base64 data URI 形式发送，附带周围页面文本作为上下文。
     """
     import os
 
@@ -219,20 +219,20 @@ def _name_image_with_llm(
 
 
 def _describe_image_with_vlm(image_bytes: bytes) -> str:
-    """Thin wrapper around vlm_client.describe_image_with_vlm for use in ingestion."""
+    """对 vlm_client.describe_image_with_vlm 的薄封装，用于文档入库。"""
     from backend.vlm_client import describe_image_with_vlm
     return describe_image_with_vlm(image_bytes)
 
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Three-level chunking (aligned with SuperMew)
+# 三级分块（对齐 SuperMew）
 # ═══════════════════════════════════════════════════════════════════
 
 class DocumentLoader:
     """
-    Document loader: reads PDF/Word, extracts images, and performs
-    three-level hierarchical chunking (aligned with SuperMew).
+    文档加载器：读取 PDF/Word 文档，提取图片，并执行
+    三级层次分块（对齐 SuperMew）。
     """
 
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):
@@ -272,7 +272,7 @@ class DocumentLoader:
         base_doc: dict,
         page_global_chunk_idx: int,
     ) -> list[dict]:
-        """Split a page's text into L1 → L2 → L3 hierarchy. Aligned with SuperMew."""
+        """将页面文本分割为 L1 → L2 → L3 层次结构。对齐 SuperMew。"""
         if not text:
             return []
 
@@ -353,22 +353,21 @@ class DocumentLoader:
         use_vlm_description: bool = False,
     ) -> tuple[list[dict], list[dict]]:
         """
-        Load a document, extract images, and chunk text.
+        加载文档，提取图片并进行文本分块。
 
         Args:
-            file_path: Path to the document file.
-            filename: Display filename for provenance tracking.
-            image_output_dir: Directory to save extracted images.
-            use_llm_naming: If True and no caption found, use LLM to name images.
-            use_vlm_description: If True, use Doubao Vision to generate pure
-                visual descriptions for each extracted image. Descriptions
-                are stored in distinguishing_features and added as L3 text
-                chunks for retrieval.
+            file_path: 文档文件路径。
+            filename: 显示用的文件名，用于来源追踪。
+            image_output_dir: 保存提取图片的目录。
+            use_llm_naming: 若为 True 且未找到题注，则使用 LLM 为图片命名。
+            use_vlm_description: 若为 True，则使用豆包视觉为每张提取的图片
+                生成纯视觉描述。描述存储在 distinguishing_features 中，
+                并作为 L3 文本块加入检索。
 
         Returns:
             (text_chunks, image_entries)
-            - text_chunks: L1/L2/L3 chunks (L3 for Milvus text, L1/L2 for PostgreSQL).
-            - image_entries: Extracted images with metadata for Image Milvus.
+            - text_chunks: L1/L2/L3 块（L3 用于 Milvus 文本检索，L1/L2 用于 PostgreSQL）。
+            - image_entries: 提取的图片及其元数据，用于 Image Milvus。
         """
         file_lower = filename.lower()
 
@@ -383,20 +382,20 @@ class DocumentLoader:
         else:
             raise ValueError(f"不支持的文件类型: {filename}")
 
-        # ── Load text ────────────────────────────────────────────
+        # ── 加载文本 ────────────────────────────────────────────
         try:
             raw_docs = loader.load()
         except Exception as e:
             raise Exception(f"处理文档失败: {str(e)}")
 
-        # ── Extract captions from full text ──────────────────────
+        # ── 从全文提取题注 ──────────────────────
         full_text = "\n".join(doc.page_content for doc in raw_docs)
 
-        # ── Build per-page data ──────────────────────────────────
+        # ── 构建逐页数据 ──────────────────────────────────
         text_chunks: list[dict] = []
         image_entries: list[dict] = []
 
-        # Group images by page.
+        # 按页分组图片。
         images_by_page: dict[int, list[dict]] = {}
         for img in raw_images:
             page = img.get("page_number", 0)
@@ -414,7 +413,7 @@ class DocumentLoader:
                 "page_number": page_num,
             }
 
-            # Three-level chunking for this page.
+            # 对本页进行三级分块。
             page_chunks = self._split_page_to_three_levels(
                 text=page_text,
                 base_doc=base_doc,
@@ -423,15 +422,15 @@ class DocumentLoader:
             page_global_chunk_idx += len(page_chunks)
             text_chunks.extend(page_chunks)
 
-            # ── Process images for this page ─────────────────────
+            # ── 处理本页图片 ─────────────────────
             page_images = images_by_page.get(page_num, [])
             if not page_images:
-                # Also match page 0 (Word docs use 0).
+                # 同时匹配 page 0（Word 文档使用 0）。
                 page_images = images_by_page.get(0, [])
 
             captions = _extract_captions(page_text)
 
-            # Find parent IDs for VLM chunks (if any images on this page)
+            # 查找 VLM 块的父级 ID（如果本页有图片）
             l1_chunks_on_page = [c for c in page_chunks if c.get("chunk_level") == 1]
             l2_chunks_on_page = [c for c in page_chunks if c.get("chunk_level") == 2]
             page_root_id = l1_chunks_on_page[0]["chunk_id"] if l1_chunks_on_page else ""
@@ -442,12 +441,12 @@ class DocumentLoader:
                 img_bytes = img_data["image_bytes"]
                 fmt = img_data.get("format", "png")
 
-                # Save image to disk.
+                # 保存图片到磁盘。
                 saved_path = _save_image(
                     img_bytes, image_output_dir, filename, img_idx, fmt,
                 )
 
-                # Name the image.
+                # 为图片命名。
                 name, caption = _name_image_from_captions(
                     img_idx, page_num, page_text, captions,
                 )
@@ -457,18 +456,18 @@ class DocumentLoader:
                         name = _name_image_with_llm(
                             img_bytes, page_text, img_idx, page_num,
                         )
-                    # Fallback: use surrounding text summary.
+                    # 回退：使用周围文本摘要。
                     if not name or name.startswith(f"第{page_num}页图片"):
                         name = page_text[:80] if page_text else f"第{page_num}页图片{img_idx + 1}"
 
-                # ── VLM visual description (optional) ──────────────────
+                # ── VLM 视觉描述（可选）──────────────────
                 vlm_description = ""
                 if use_vlm_description:
                     vlm_description = _describe_image_with_vlm(img_bytes)
                     if vlm_description:
                         print(f"    ✓ 图片 {img_idx+1} VLM 描述已生成 ({len(vlm_description)}字)")
 
-                # Link to the nearest L3 chunk on this page.
+                # 关联到本页最近的 L3 块。
                 l3_chunks = [c for c in page_chunks if c.get("chunk_level") == 3]
                 linked_chunk_id = l3_chunks[0]["chunk_id"] if l3_chunks else ""
                 if l3_chunks and img_idx < len(l3_chunks):
@@ -485,7 +484,7 @@ class DocumentLoader:
                     "cave": "",
                 })
 
-                # ── Create VLM text chunk for retrieval ──────────────
+                # ── 创建 VLM 文本块用于检索 ──────────────
                 if vlm_description:
                     vlm_chunk_id = f"{filename}::p{page_num}::vlm::{img_idx}"
                     text_chunks.append({
@@ -510,7 +509,7 @@ class DocumentLoader:
         use_llm_naming: bool = False,
     ) -> tuple[list[dict], list[dict]]:
         """
-        Load all supported documents from a folder.
+        从文件夹中加载所有支持的文档。
 
         Returns: (all_text_chunks, all_image_entries)
         """
@@ -541,7 +540,7 @@ class DocumentLoader:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Ingestion helper
+# 入库辅助函数
 # ═══════════════════════════════════════════════════════════════════
 
 def ingest_document(
@@ -550,14 +549,13 @@ def ingest_document(
     use_vlm_description: bool = False,
 ) -> None:
     """
-    End-to-end ingestion: document → chunking → PostgreSQL + dual Milvus.
+    端到端入库：文档 → 分块 → PostgreSQL + 双 Milvus 集合。
 
     Args:
-        file_path: Path to the document.
-        use_llm_naming: If True, use LLM to name images without captions.
-        use_vlm_description: If True, use Doubao Vision to generate pure
-            visual descriptions for images. Descriptions replace image
-            placeholders in text and are indexed as L3 chunks.
+        file_path: 文档路径。
+        use_llm_naming: 若为 True，为缺少题注的图片使用 LLM 命名。
+        use_vlm_description: 若为 True，使用豆包视觉为图片生成纯视觉描述。
+            描述会替换文本中的图片占位符，并作为 L3 块进行索引。
     """
     from backend.milvus_writer import milvus_writer
     from backend.parent_chunk_store import parent_chunk_store
@@ -573,16 +571,16 @@ def ingest_document(
         use_vlm_description=use_vlm_description,
     )
 
-    # Separate L1/L2 (parent chunks) from L3 (leaf chunks).
+    # 将 L1/L2（父块）与 L3（叶子块）分开。
     l1_l2_chunks = [c for c in text_chunks if c.get("chunk_level") in (1, 2)]
     l3_chunks = [c for c in text_chunks if c.get("chunk_level") == 3]
 
-    # Write L1/L2 → PostgreSQL.
+    # 写入 L1/L2 → PostgreSQL。
     if l1_l2_chunks:
         count = parent_chunk_store.upsert_documents(l1_l2_chunks)
         print(f"  ✓ L1/L2 父块 → PostgreSQL: {count} 条")
 
-    # Write L3 text → Text Milvus.
+    # 写入 L3 文本 → Text Milvus。
     if l3_chunks:
         milvus_writer.write_text_chunks(
             l3_chunks,
@@ -592,7 +590,7 @@ def ingest_document(
         )
         print(f"\n  ✓ L3 文本块 → Text Milvus: {len(l3_chunks)} 条")
 
-    # Write images → Image Milvus.
+    # 写入图片 → Image Milvus。
     if image_entries:
         milvus_writer.write_image_pois(
             image_entries,
@@ -602,7 +600,7 @@ def ingest_document(
         )
         print(f"\n  ✓ 图片 → Image Milvus: {len(image_entries)} 条")
 
-    # Summary.
+    # 汇总。
     print(
         f"\n  摄入完成: {len(l1_l2_chunks)} L1/L2 + "
         f"{len(l3_chunks)} L3 + {len(image_entries)} 图片"

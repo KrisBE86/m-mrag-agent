@@ -1,10 +1,10 @@
 """
-FastAPI application entry point for MRagAgent.
+MRagAgent 的 FastAPI 应用入口。
 
-- CORS enabled for all origins (development).
-- No-cache middleware for frontend files.
-- PostgreSQL + Milvus initialization on startup.
-- Static file serving for the frontend/ directory.
+- 开发环境下对所有来源启用 CORS。
+- 对前端文件禁用缓存中间件。
+- 启动时初始化 PostgreSQL + Milvus。
+- 为 frontend/ 目录提供静态文件服务。
 """
 
 import os
@@ -26,13 +26,13 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup_init():
-        # Initialize PostgreSQL tables.
+        # 初始化 PostgreSQL 表。
         try:
             init_db()
         except Exception:
-            pass  # Non-fatal: DB may already be initialized.
+            pass  # 非致命：数据库可能已经初始化过。
 
-        # Initialize Milvus collections.
+        # 初始化 Milvus 集合。
         try:
             from backend.milvus_client import milvus_manager
             from backend.embedding import clip_embeddings, bge_embeddings
@@ -40,7 +40,7 @@ def create_app() -> FastAPI:
             milvus_manager.init_image_collection(dense_dim=clip_embeddings.dimension)
             milvus_manager.init_text_collection(dense_dim=bge_embeddings.dimension)
         except Exception:
-            pass  # Non-fatal: collections may already exist.
+            pass  # 非致命：集合可能已经存在。
 
     app.add_middleware(
         CORSMiddleware,
@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # No-cache middleware for development.
+    # 开发环境下禁用缓存中间件。
     @app.middleware("http")
     async def _no_cache(request, call_next):
         response = await call_next(request)
@@ -63,7 +63,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
-    # Serve frontend static files at root.
+    # 在根路径提供前端静态文件服务。
     if FRONTEND_DIR.exists():
         app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
 

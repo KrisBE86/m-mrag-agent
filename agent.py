@@ -1,10 +1,10 @@
 """
-MRagAgent — Multimodal RAG Agent for Cultural Heritage POI Identification.
+MRagAgent — 文化遗产POI细粒度识别的多模态RAG智能体。
 
-- LLM: DeepSeek via OpenAI-compatible API (ChatOpenAI).
-- Tools: calculator, get_current_weather, identify_from_image, search_knowledge_base.
-- Agent framework: LangChain create_agent with LangGraph SqliteSaver for conversation memory.
-- Image → text conversion → text RAG pipeline (two tools, serial orchestration).
+- LLM: DeepSeek，通过 OpenAI 兼容 API 调用（ChatOpenAI）。
+- 工具: calculator, get_current_weather, identify_from_image, search_knowledge_base。
+- Agent 框架: LangChain create_agent + LangGraph SqliteSaver 对话记忆。
+- 图片 → 文本转换 → 文本 RAG 流水线（两个工具，串行编排）。
 """
 
 import os
@@ -20,12 +20,11 @@ load_dotenv()
 
 
 def _init_langsmith() -> None:
-    """Initialize LangSmith tracing if configured.
+    """初始化 LangSmith 追踪（如果已配置）。
 
-    When LANGSMITH_TRACING_V2=true, LangChain auto-registers the
-    LangSmith tracer as a callback handler — no manual wiring needed.
-    All LLM calls, tool invocations, and agent steps are traced
-    automatically, including search_knowledge_base inputs/outputs.
+    当 LANGSMITH_TRACING_V2=true 时，LangChain 会自动将 LangSmith tracer
+    注册为回调处理器——无需手动接线。所有 LLM 调用、工具调用和 Agent 步骤
+    都会被自动追踪，包括 search_knowledge_base 的输入/输出。
     """
     if os.getenv("LANGSMITH_TRACING_V2", "").lower() != "true":
         return
@@ -38,12 +37,12 @@ def _init_langsmith() -> None:
         return
 
     try:
-        # LangChain auto-instruments when env vars are set, but we
-        # explicitly configure the tracer for metadata control.
+        # LangChain 在环境变量设置后会自动注入，但我们
+        # 显式配置 tracer 以获得元数据控制。
         from langsmith import Client
 
         client = Client(api_key=api_key)
-        # Verify connectivity.
+        # 验证连通性。
         client.list_projects()
         print(f"  ✓ LangSmith 追踪已启用 (项目: {project})")
         try:
@@ -107,7 +106,7 @@ def _create_llm():
     )
 
 
-# ── Built-in tools ───────────────────────────────────────────────
+# ── 内置工具 ─────────────────────────────────────────────────
 
 @tool
 def calculator(expression: str) -> str:
@@ -133,10 +132,10 @@ def get_current_weather(city: str) -> str:
     return weather_data.get(city, f"{city}：晴天，23°C，湿度 50%（模拟数据）")
 
 
-# ── Agent builders ───────────────────────────────────────────────
+# ── Agent 构建器 ────────────────────────────────────────────────
 
 def build_agent():
-    """Build and return the MRagAgent (sync checkpointer)."""
+    """构建并返回 MRagAgent（同步 checkpointer）。"""
 
     _init_langsmith()
 
@@ -160,11 +159,11 @@ def build_agent():
 
 
 def build_agent_async():
-    """Build and return the MRagAgent without checkpointer (for astream).
+    """构建并返回 MRagAgent，不带 checkpointer（用于 astream）。
 
-    Note: AsyncSqliteSaver requires aiosqlite + async context manager;
-    for now streaming uses no persistence. SuperMew handles memory
-    externally via PostgreSQL instead of checkpointer.
+    注意: AsyncSqliteSaver 需要 aiosqlite + 异步上下文管理器；
+    目前流式输出不保存状态。SuperMew 通过 PostgreSQL
+    在外部管理记忆，而非通过 checkpointer。
     """
 
     _init_langsmith()

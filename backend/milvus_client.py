@@ -1,21 +1,21 @@
 """
-Milvus vector database client — dual collection architecture.
+Milvus 向量数据库客户端 — 双 Collection 架构。
 
-Collection 1 — image_poi_collection:
-  Chinese-CLIP dense vectors (768d) for image-to-image and short-text-to-image search.
-  HNSW index, IP metric. No sparse field needed.
+Collection 1 — image_poi_collection：
+  Chinese-CLIP 稠密向量（768 维），用于图像到图像和短文本到图像搜索。
+  HNSW 索引，IP 度量。不需要稀疏字段。
 
-Collection 2 — text_chunk_collection:
-  BGE-M3 dense (1024d) + BM25 sparse for hybrid text retrieval.
-  HNSW + SPARSE_INVERTED_INDEX, RRFRanker fusion.
-  Completely aligned with SuperMew's text collection schema.
+Collection 2 — text_chunk_collection：
+  BGE-M3 稠密（1024 维）+ BM25 稀疏，用于混合文本检索。
+  HNSW + SPARSE_INVERTED_INDEX，RRFRanker 融合。
+  完全对齐 SuperMew 的文本 collection schema。
 
-Features:
-- Lazy connection + auto-reconnect on gRPC "closed channel" errors.
-- init_image_collection() / init_text_collection() with schema + indexes.
-- image_search(): dense-only CLIP search on Collection 1.
-- hybrid_retrieve(): dense + sparse + RRF on Collection 2 (same as SuperMew).
-- CRUD: insert, query, delete for both collections.
+功能特性：
+- 惰性连接 + gRPC "closed channel" 错误时自动重连。
+- init_image_collection() / init_text_collection()：创建 schema + 索引。
+- image_search()：Collection 1 上的纯稠密 CLIP 搜索。
+- hybrid_retrieve()：Collection 2 上的稠密 + 稀疏 + RRF（与 SuperMew 一致）。
+- CRUD：两个 collection 的插入、查询、删除操作。
 """
 
 import os
@@ -32,7 +32,7 @@ T = TypeVar("T")
 
 
 class MilvusManager:
-    """Milvus connection manager for two collections."""
+    """Milvus 连接管理器，管理两个 collection。"""
 
     def __init__(self):
         self.host = os.getenv("MILVUS_HOST", "127.0.0.1")
@@ -43,7 +43,7 @@ class MilvusManager:
         self.client: MilvusClient | None = None
         self._client_lock = threading.RLock()
 
-    # ── connection management ────────────────────────────────────
+    # ── 连接管理 ───────────────────────────────────────────────
 
     def _get_client(self) -> MilvusClient:
         with self._client_lock:
@@ -86,11 +86,11 @@ class MilvusManager:
             return operation(self._get_client())
 
     # ══════════════════════════════════════════════════════════════
-    # Collection 1: Image POI (Chinese-CLIP, dense only)
+    # Collection 1：图像 POI（Chinese-CLIP，仅稠密向量）
     # ══════════════════════════════════════════════════════════════
 
     def init_image_collection(self, dense_dim: int = 768) -> None:
-        """Initialize the image POI collection with CLIP 768d dense vectors."""
+        """初始化图像 POI collection，使用 CLIP 768 维稠密向量。"""
 
         def _init(client: MilvusClient) -> None:
             if client.has_collection(self.image_collection):
@@ -131,8 +131,8 @@ class MilvusManager:
         filter_expr: str = "",
     ) -> list[dict]:
         """
-        Dense-only image vector search on Collection 1.
-        Returns POI metadata including poi_description for downstream text RAG.
+        Collection 1 上的纯稠密图像向量搜索。
+        返回 POI 元数据（含 poi_description），供下游文本 RAG 使用。
         """
 
         output_fields = [
@@ -170,17 +170,17 @@ class MilvusManager:
         return formatted
 
     def insert_to_image_collection(self, data: list[dict]) -> dict:
-        """Insert POI image data into Collection 1."""
+        """将 POI 图像数据插入 Collection 1。"""
         return self._run_with_reconnect(
             lambda client: client.insert(self.image_collection, data)
         )
 
     # ══════════════════════════════════════════════════════════════
-    # Collection 2: Text Chunks (BGE-M3 + BM25, aligned w/ SuperMew)
+    # Collection 2：文本块（BGE-M3 + BM25，对齐 SuperMew）
     # ══════════════════════════════════════════════════════════════
 
     def init_text_collection(self, dense_dim: int = 1024) -> None:
-        """Initialize the text chunk collection (dense + sparse). Same as SuperMew."""
+        """初始化文本块 collection（稠密 + 稀疏）。与 SuperMew 一致。"""
 
         def _init(client: MilvusClient) -> None:
             if client.has_collection(self.text_collection):
@@ -235,8 +235,8 @@ class MilvusManager:
         filter_expr: str = "",
     ) -> list[dict]:
         """
-        Hybrid retrieval on Collection 2: dense (HNSW) + sparse (BM25) fused via RRF.
-        Completely aligned with SuperMew's hybrid_retrieve().
+        Collection 2 上的混合检索：稠密（HNSW）+ 稀疏（BM25），通过 RRF 融合。
+        完全对齐 SuperMew 的 hybrid_retrieve()。
         """
 
         output_fields = [
@@ -295,12 +295,12 @@ class MilvusManager:
         return formatted
 
     def insert_to_text_collection(self, data: list[dict]) -> dict:
-        """Insert text chunk data into Collection 2."""
+        """将文本块数据插入 Collection 2。"""
         return self._run_with_reconnect(
             lambda client: client.insert(self.text_collection, data)
         )
 
-    # ── shared CRUD ──────────────────────────────────────────────
+    # ── 公共 CRUD ───────────────────────────────────────────────
 
     def query(
         self,
@@ -338,7 +338,7 @@ class MilvusManager:
         self._run_with_reconnect(_drop)
 
     def get_chunks_by_ids(self, chunk_ids: list[str]) -> list[dict]:
-        """Query Collection 2 by chunk_id list (used for auto-merging)."""
+        """按 chunk_id 列表查询 Collection 2（用于 auto-merge）。"""
         ids = [item for item in chunk_ids if item]
         if not ids:
             return []
@@ -356,5 +356,5 @@ class MilvusManager:
         )
 
 
-# Module-level singleton, aligned with SuperMew pattern.
+# 模块级单例，对齐 SuperMew 模式。
 milvus_manager = MilvusManager()

@@ -1,10 +1,10 @@
 """
-Parent chunk L1/L2 storage service — PostgreSQL + Redis.
+父块 L1/L2 存储服务 — PostgreSQL + Redis。
 
-- Aligned with SuperMew's ParentChunkStore pattern.
-- upsert_documents: batch write/update parent chunks + Redis cache.
-- get_documents_by_ids: batch query by chunk_id, Redis-first then PostgreSQL fallback.
-- delete_by_filename: remove all parent chunks + cache for a filename.
+- 对齐 SuperMew 的 ParentChunkStore 模式。
+- upsert_documents: 批量写入/更新父块 + Redis 缓存。
+- get_documents_by_ids: 按 chunk_id 批量查询，Redis 优先，PostgreSQL 回退。
+- delete_by_filename: 删除指定文件名的所有父块 + 缓存。
 """
 
 from datetime import datetime
@@ -16,7 +16,7 @@ from backend.models import ParentChunk
 
 
 class ParentChunkStore:
-    """PostgreSQL + Redis parent chunk storage for auto-merging retrieval."""
+    """PostgreSQL + Redis 父块存储，用于自动合并检索。"""
 
     @staticmethod
     def _to_dict(item: ParentChunk) -> dict:
@@ -38,7 +38,7 @@ class ParentChunkStore:
         return f"parent_chunk:{chunk_id}"
 
     def upsert_documents(self, docs: List[dict]) -> int:
-        """Write/update parent chunks. Returns upserted count."""
+        """写入/更新父块。返回 upsert 数量。"""
         if not docs:
             return 0
 
@@ -87,7 +87,7 @@ class ParentChunkStore:
         return upserted
 
     def get_documents_by_ids(self, chunk_ids: List[str]) -> List[dict]:
-        """Get parent chunks by chunk_id list. Redis-first, PostgreSQL fallback."""
+        """按 chunk_id 列表获取父块。Redis 优先，PostgreSQL 回退。"""
         if not chunk_ids:
             return []
 
@@ -121,7 +121,7 @@ class ParentChunkStore:
         return [ordered_results[item] for item in chunk_ids if item in ordered_results]
 
     def delete_by_filename(self, filename: str) -> int:
-        """Delete all parent chunks for a filename. Returns deleted count."""
+        """删除指定文件名的所有父块。返回删除数量。"""
         if not filename:
             return 0
 
@@ -146,5 +146,5 @@ class ParentChunkStore:
             db.close()
 
 
-# Module-level singleton, aligned with SuperMew pattern.
+# 模块级单例，对齐 SuperMew 模式。
 parent_chunk_store = ParentChunkStore()

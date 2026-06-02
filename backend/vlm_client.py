@@ -1,9 +1,9 @@
 """
-Shared Doubao Vision client (Volcengine Ark) for image description.
+共享的豆包视觉客户端（火山引擎 Ark），用于图片描述。
 
-Used by both document_loader (ingestion) and image_retriever (query).
-The prompt instructs the VLM to describe visual features only — never
-to guess site/scene names. Site identification is handled by text retrieval.
+同时被 document_loader（文档导入）和 image_retriever（查询）使用。
+提示词指示 VLM 仅描述视觉特征——绝不
+猜测地点/场景名称。地点识别由文本检索处理。
 """
 
 import base64
@@ -16,13 +16,13 @@ load_dotenv()
 
 
 def describe_image_with_vlm(image_bytes: bytes) -> str:
-    """Generate a pure visual description of an image using Doubao Vision.
+    """使用豆包视觉模型生成图片的纯视觉描述。
 
-    Returns a Chinese description focusing on observable features:
-    subject type/count, poses/gestures, attire/decorations, spatial
-    layout, colors/materials. Deliberately avoids guessing site names.
+    返回中文描述，聚焦于可观察的特征：
+    主体类型与数量、姿态与手势、服饰与装饰、空间
+    布局、色彩与材质。刻意避免猜测地点名称。
 
-    Returns empty string on any failure (graceful degradation).
+    任何失败时返回空字符串（优雅降级）。
     """
     from openai import OpenAI
 
@@ -34,7 +34,7 @@ def describe_image_with_vlm(image_bytes: bytes) -> str:
         return ""
 
     try:
-        # Detect image format.
+        # 检测图片格式。
         fmt = "png"
         try:
             from PIL import Image

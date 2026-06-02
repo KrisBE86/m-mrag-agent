@@ -1,8 +1,8 @@
 """
-SQLAlchemy ORM models.
+SQLAlchemy ORM 模型。
 
-- ParentChunk: L1/L2 parent chunks stored in PostgreSQL for auto-merging retrieval.
-  Aligned with SuperMew's parent_chunks table schema.
+- ParentChunk：存储在 PostgreSQL 中的 L1/L2 父级文本块，用于自动合并检索。
+  与 SuperMew 的 parent_chunks 表结构保持一致。
 """
 
 from datetime import datetime
@@ -14,10 +14,10 @@ from backend.database import Base
 
 
 class ParentChunk(Base):
-    """L1 (site-level) and L2 (cave/area-level) parent chunks.
+    """L1（遗址级别）和 L2（窟/区域级别）父级文本块。
 
-    Stored in PostgreSQL. Retrieved during auto-merge when multiple sibling
-    L3 leaf chunks from the same parent are found in retrieval results.
+    存储在 PostgreSQL 中。当检索结果中发现同一父块下的多个 L3 叶子块时，
+    在自动合并过程中被调取。
     """
 
     __tablename__ = "parent_chunks"

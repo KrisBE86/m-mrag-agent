@@ -1,12 +1,12 @@
 """
-RAG retrieval utilities: hybrid search + auto-merge.
+RAG 检索工具：混合搜索 + 自动合并。
 
-Core pipeline (aligned with SuperMew's rag_utils.py):
-  1. Hybrid retrieval: BGE-M3 dense + BM25 sparse → Milvus RRF fusion
-  2. Auto-merging: L3 → L2 → L1 when sibling chunks reach threshold
-  3. (Optional) External reranker for precision refinement
+核心流水线（对齐 SuperMew 的 rag_utils.py）：
+  1. 混合检索：BGE-M3 稠密向量 + BM25 稀疏向量 → Milvus RRF 融合
+  2. 自动合并：同级块达到阈值时 L3 → L2 → L1
+  3. (可选) 外部重排序器用于精度优化
 
-Module-level singletons ensure BM25 state consistency across writes and reads.
+模块级单例保证 BM25 状态在读写间的一致性。
 """
 
 import os
@@ -25,18 +25,18 @@ AUTO_MERGE_ENABLED = os.getenv("AUTO_MERGE_ENABLED", "true").lower() != "false"
 AUTO_MERGE_THRESHOLD = int(os.getenv("AUTO_MERGE_THRESHOLD", "2"))
 LEAF_RETRIEVE_LEVEL = int(os.getenv("LEAF_RETRIEVE_LEVEL", "3"))
 
-# Optional reranker config.
+# 可选的重排序器配置。
 RERANK_MODEL = os.getenv("RERANK_MODEL", "")
 RERANK_BINDING_HOST = os.getenv("RERANK_BINDING_HOST", "")
 RERANK_API_KEY = os.getenv("RERANK_API_KEY", "")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Auto-Merge (aligned with SuperMew)
+# 自动合并（对齐 SuperMew）
 # ═══════════════════════════════════════════════════════════════════
 
 def _merge_to_parent_level(docs: list[dict], threshold: int = 2) -> tuple[list[dict], int]:
-    """Merge L3→L2 (or L2→L1) when >= threshold siblings share the same parent."""
+    """当 >= 阈值个数的同级块共享同一父块时，合并 L3→L2（或 L2→L1）。"""
     groups: dict[str, list[dict]] = defaultdict(list)
     for doc in docs:
         parent_id = (doc.get("parent_chunk_id") or "").strip()
@@ -70,7 +70,7 @@ def _merge_to_parent_level(docs: list[dict], threshold: int = 2) -> tuple[list[d
         merged_docs.append(parent_doc)
         merged_count += 1
 
-    # Deduplicate by chunk_id.
+    # 按 chunk_id 去重。
     deduped: list[dict] = []
     seen = set()
     for item in merged_docs:
@@ -84,7 +84,7 @@ def _merge_to_parent_level(docs: list[dict], threshold: int = 2) -> tuple[list[d
 
 
 def _auto_merge_documents(docs: list[dict], top_k: int) -> tuple[list[dict], dict[str, Any]]:
-    """Two-stage auto-merge: L3→L2 then L2→L1."""
+    """两阶段自动合并：L3→L2 然后 L2→L1。"""
     if not AUTO_MERGE_ENABLED or not docs:
         return docs[:top_k], {
             "auto_merge_enabled": AUTO_MERGE_ENABLED,
@@ -111,16 +111,16 @@ def _auto_merge_documents(docs: list[dict], top_k: int) -> tuple[list[dict], dic
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Text Retrieval (aligned with SuperMew)
+# 文本检索（对齐 SuperMew）
 # ═══════════════════════════════════════════════════════════════════
 
 def retrieve_documents(query: str, top_k: int = 5) -> dict[str, Any]:
     """
-    Hybrid text retrieval: BGE-M3 dense + BM25 sparse → RRF → auto-merge.
+    混合文本检索：BGE-M3 稠密向量 + BM25 稀疏向量 → RRF → 自动合并。
 
     Args:
-        query: Chinese text query.
-        top_k: Number of results to return.
+        query: 中文文本查询。
+        top_k: 返回结果数量。
 
     Returns:
         {"docs": [...], "meta": {...}}
@@ -150,12 +150,12 @@ def retrieve_documents(query: str, top_k: int = 5) -> dict[str, Any]:
             },
         }
     except Exception:
-        # Fallback: dense-only retrieval.
+        # 回退：仅稠密向量检索。
         try:
             dense_embedding = bge_embeddings.embed_query(query)
             retrieved = milvus_manager.hybrid_retrieve(
                 dense_embedding=dense_embedding,
-                sparse_embedding={},  # empty sparse → effectively dense-only
+                sparse_embedding={},  # 空稀疏向量 → 等效为纯稠密检索
                 top_k=candidate_k,
                 filter_expr=filter_expr,
             )
@@ -187,8 +187,8 @@ def retrieve_documents(query: str, top_k: int = 5) -> dict[str, Any]:
 
 def retrieve_with_context(query: str, top_k: int = 5) -> str:
     """
-    Hybrid text retrieval returning formatted context string.
-    Suitable for direct consumption by LLM generation.
+    混合文本检索，返回格式化后的上下文字符串。
+    适合直接供 LLM 生成使用。
     """
     result = retrieve_documents(query, top_k=top_k)
     docs = result["docs"]

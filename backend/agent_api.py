@@ -1,25 +1,25 @@
 """
-Agent API — synchronous chat and SSE streaming wrappers.
+Agent API — 同步对话和 SSE 流式输出包装器。
 
-Wraps the existing MRagAgent (agent.py) for use with FastAPI.
-Supports:
-  - sync chat: invoke the agent and return the full response.
-  - SSE streaming: async generator using agent.astream(), following
-    SuperMew's pattern — no threads, everything in the same event loop.
+将现有 MRagAgent (agent.py) 包装为 FastAPI 可用。
+支持:
+  - 同步对话: 调用 agent 并返回完整响应。
+  - SSE 流式输出: 使用 agent.astream() 的异步生成器，遵循
+    SuperMew 的模式——无需线程，全部在同一事件循环中运行。
 
-Streaming phase design:
-  - "thinking" phase: agent's internal reasoning text + tool calls.
-    These are displayed in a collapsible section in the frontend.
-  - "answering" phase: the final response after all tool calls complete.
-    This is the main visible answer.
+流式输出阶段设计:
+  - "thinking" 阶段: agent 的内部推理文本 + 工具调用。
+    在前端以可折叠区域展示。
+  - "answering" 阶段: 所有工具调用完成后的最终回复。
+    这是主要可见的回答内容。
 
-  Phase detection strategy:
-    - All agent text is buffered. When tool_call_chunks appear, the buffer
-      is flushed as "thinking" (the agent was reasoning about what tool to call).
-    - When the stream ends, any remaining buffered text is the final answer
-      and is flushed as "content".
-    - This approach is simple and does not depend on LangGraph's internal
-      metadata structure, making it robust across versions.
+  阶段检测策略:
+    - 所有 agent 文本被缓冲。当出现 tool_call_chunks 时，缓冲区
+      内容作为 "thinking" 刷新（agent 正在推理调用哪个工具）。
+    - 流结束时，剩余缓冲文本即为最终回答，
+      作为 "content" 刷新。
+    - 此方案简单，不依赖 LangGraph 内部的
+      元数据结构，在不同版本间具有鲁棒性。
 """
 
 import json
@@ -27,18 +27,18 @@ from typing import AsyncGenerator, Optional
 
 from agent import build_agent, build_agent_async
 
-# Module-level singleton agent (sync checkpointer for synchronous use).
+# 模块级单例 agent（带同步 checkpointer，用于同步场景）。
 _sync_agent = build_agent()
 
-# Lazy async agent — only created inside an event loop.
+# 延迟加载的异步 agent —— 仅在事件循环内创建。
 _async_agent = None
 
-# Fixed thread_id for now (single-user testing).
+# 当前固定 thread_id（单用户测试）。
 DEFAULT_CONFIG = {"configurable": {"thread_id": "main-chat"}}
 
 
 def _get_async_agent():
-    """Lazy-init the async agent. Must be called from within an event loop."""
+    """延迟初始化异步 agent。必须在事件循环内调用。"""
     global _async_agent
     if _async_agent is None:
         _async_agent = build_agent_async()
@@ -46,7 +46,7 @@ def _get_async_agent():
 
 
 def _extract_content(msg) -> str:
-    """Extract text content from an AIMessageChunk, handling str and list formats."""
+    """从 AIMessageChunk 中提取文本内容，处理 str 和 list 两种格式。"""
     if isinstance(msg.content, str):
         return msg.content
     if isinstance(msg.content, list):
@@ -61,13 +61,13 @@ def _extract_content(msg) -> str:
 
 
 def _sse_event(data: dict) -> str:
-    """Format a dict as an SSE data event."""
+    """将字典格式化为 SSE data 事件。"""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def chat_sync(user_message: str, config: Optional[dict] = None) -> str:
     """
-    Synchronous chat: invoke the agent and return the response text.
+    同步对话: 调用 agent 并返回响应文本。
     """
     cfg = config or DEFAULT_CONFIG
     result = _sync_agent.invoke(
@@ -82,15 +82,15 @@ async def chat_stream(
     config: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """
-    SSE streaming chat with thinking/answering phase separation.
+    SSE 流式对话，带思考/回答阶段分离。
 
-    Strategy:
-      - Buffer all agent text. When tool_call_chunks appear, the buffered
-        text is flushed as "thinking" (the agent was reasoning about which
-        tool to invoke).
-      - Tool invocations are emitted as "tool_call" events.
-      - When the stream ends, any remaining buffered text is the final answer
-        and is emitted as "content".
+    策略:
+      - 缓冲所有 agent 文本。当出现 tool_call_chunks 时，缓冲的
+        文本作为 "thinking" 刷新（agent 正在推理调用
+        哪个工具）。
+      - 工具调用以 "tool_call" 事件发出。
+      - 流结束时，剩余缓冲文本即为最终回答，
+        作为 "content" 发出。
     """
     agent = _get_async_agent()
     cfg = config or DEFAULT_CONFIG
@@ -98,7 +98,7 @@ async def chat_stream(
     text_buffer: str = ""
 
     def _flush_as_thinking():
-        """Flush the current buffer as a thinking event if non-empty."""
+        """如果缓冲区非空，将当前缓冲区作为 thinking 事件刷新。"""
         nonlocal text_buffer
         if text_buffer:
             yield _sse_event({"type": "thinking", "text": text_buffer})
@@ -118,10 +118,10 @@ async def chat_stream(
             tool_calls = getattr(msg, "tool_call_chunks", None)
 
             if tool_calls:
-                # Any text before a tool call is the agent's internal reasoning
+                # 工具调用之前的任何文本都是 agent 的内部推理
                 for event in _flush_as_thinking():
                     yield event
-                # Emit tool call events
+                # 发出工具调用事件
                 for tc in tool_calls:
                     name = tc.get("name", "")
                     if name:
@@ -132,7 +132,7 @@ async def chat_stream(
             if content:
                 text_buffer += content
 
-        # Stream ended — whatever is left is the final answer
+        # 流结束 —— 剩余内容即为最终回答
         if text_buffer:
             yield _sse_event({"type": "content", "text": text_buffer})
 

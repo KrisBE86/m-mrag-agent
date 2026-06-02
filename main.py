@@ -1,19 +1,19 @@
 """
-MRagAgent CLI — Multimodal RAG Agent for Cultural Heritage POI Identification.
+MRagAgent CLI — 文化遗产POI细粒度识别的多模态RAG智能体命令行界面。
 
-Startup:
-  1. Initialize PostgreSQL tables (parent_chunks).
-  2. Initialize Milvus dual collections (image_poi + text_chunk).
-  3. Load BM25 state from persistence.
-  4. Start interactive REPL with Agent.
+启动流程:
+  1. 初始化 PostgreSQL 表（parent_chunks）。
+  2. 初始化 Milvus 双集合（image_poi + text_chunk）。
+  3. 从持久化存储加载 BM25 状态。
+  4. 启动交互式 REPL（Agent 对话循环）。
 
-Usage:
+用法:
   python main.py
 
-The agent handles:
-  - Text-only questions → search_knowledge_base
-  - Image questions → identify_from_image → search_knowledge_base
-  - Calculator and weather queries
+Agent 可处理:
+  - 纯文本提问 → search_knowledge_base
+  - 图片提问 → identify_from_image → search_knowledge_base
+  - 计算器和天气查询
 """
 
 from agent import build_agent
@@ -21,17 +21,17 @@ from backend.database import init_db
 
 
 def init_rag_modules() -> None:
-    """Initialize RAG infrastructure on startup."""
+    """启动时初始化 RAG 基础设施。"""
     print("正在初始化 MRagAgent 后端...")
 
-    # 1. PostgreSQL tables.
+    # 1. PostgreSQL 表。
     try:
         init_db()
         print("  ✓ PostgreSQL 表初始化完成")
     except Exception as e:
         print(f"  ⚠ PostgreSQL 初始化失败 (Docker 是否已启动?): {e}")
 
-    # 2. Milvus collections.
+    # 2. Milvus 集合。
     try:
         from backend.milvus_client import milvus_manager
         from backend.embedding import clip_embeddings, bge_embeddings
@@ -44,14 +44,14 @@ def init_rag_modules() -> None:
     except Exception as e:
         print(f"  ⚠ Milvus 初始化失败 (Docker 是否已启动?): {e}")
 
-    # 3. BM25 state is auto-loaded by ChineseBM25 singleton on first import.
+    # 3. BM25 状态在首次导入时由 ChineseBM25 单例自动加载。
     print("  ✓ BM25 状态加载完成")
 
     print("MRagAgent 后端初始化完成\n")
 
 
 def main():
-    """Entry point: init modules, build agent, start REPL."""
+    """入口函数：初始化模块、构建 agent、启动 REPL。"""
     init_rag_modules()
 
     agent = build_agent()

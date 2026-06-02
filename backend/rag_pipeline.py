@@ -1,14 +1,14 @@
 """
-LangGraph RAG pipeline for POI identification and scene explanation.
+LangGraph RAG 流水线，用于 POI 识别和场景解说。
 
-State graph (MVP):
+状态图 (MVP):
   retrieve → auto_merge → verify → generate
 
-Future expansion (Phase 2, aligned with SuperMew):
+未来扩展 (Phase 2, 对齐 SuperMew):
   retrieve → grade → [auto_merge → verify → generate]
                    → [rewrite → expand → auto_merge → verify → generate]
 
-This module builds and compiles the LangGraph state machine.
+本模块负责构建和编译 LangGraph 状态机。
 """
 
 import os
@@ -25,26 +25,26 @@ from backend.schemas import CandidateResult, IdentificationResult
 load_dotenv()
 
 
-# ── State definition ────────────────────────────────────────────
+# ── 状态定义 ────────────────────────────────────────────────────
 
 from typing import TypedDict
 
 
 class RAGState(TypedDict):
-    """State for the POI identification RAG pipeline."""
-    query: str                         # User's question (may include image identification results)
-    query_image_path: str              # Original query image path (for context)
-    retrieved_docs: list[dict]         # Raw retrieval results
-    merged_context: str                # Auto-merged context string
-    identification: str                # LLM verification result
-    final_answer: str                  # Final generated explanation
-    rag_meta: dict                     # Retrieval metadata for tracing
+    """POI 识别 RAG 流水线的状态定义。"""
+    query: str                         # 用户问题（可能包含图片识别结果）
+    query_image_path: str              # 原始查询图片路径（用于上下文）
+    retrieved_docs: list[dict]         # 原始检索结果
+    merged_context: str                # 自动合并后的上下文字符串
+    identification: str                # LLM 验证结果
+    final_answer: str                  # 最终生成的解说
+    rag_meta: dict                     # 检索元数据，用于追踪
 
 
-# ── Node functions ───────────────────────────────────────────────
+# ── 节点函数 ───────────────────────────────────────────────
 
 def _retrieve_node(state: RAGState) -> dict:
-    """Node 1: Hybrid text retrieval."""
+    """节点 1: 混合文本检索。"""
     query = state["query"]
     result = retrieve_documents(query, top_k=5)
     return {
@@ -54,7 +54,7 @@ def _retrieve_node(state: RAGState) -> dict:
 
 
 def _auto_merge_node(state: RAGState) -> dict:
-    """Node 2: Build merged context from retrieved docs."""
+    """节点 2: 根据检索到的文档构建合并上下文。"""
     docs = state.get("retrieved_docs", [])
     if not docs:
         return {"merged_context": "【未找到相关内容】"}
@@ -83,14 +83,14 @@ def _auto_merge_node(state: RAGState) -> dict:
 
 
 def _verify_node(state: RAGState, llm: BaseChatModel) -> dict:
-    """Node 3: LLM verification / disambiguation."""
+    """节点 3: LLM 验证 / 消歧。"""
     docs = state.get("retrieved_docs", [])
     merged = state.get("merged_context", "")
 
     if not docs:
         return {"identification": "【无法确定】未在知识库中找到匹配的文物点。"}
 
-    # Build simple verification prompt.
+    # 构建简单的验证 prompt。
     prompt = (
         "你是一位文化遗产鉴定专家。根据以下检索到的知识库内容，"
         "判断用户查询的内容最可能对应哪一个文物点，并简要说明理由。\n\n"
@@ -110,7 +110,7 @@ def _verify_node(state: RAGState, llm: BaseChatModel) -> dict:
 
 
 def _generate_node(state: RAGState, llm: BaseChatModel) -> dict:
-    """Node 4: Generate final scene explanation."""
+    """节点 4: 生成最终场景解说。"""
     query = state.get("query", "")
     identification = state.get("identification", "")
     merged = state.get("merged_context", "")
@@ -133,17 +133,17 @@ def _generate_node(state: RAGState, llm: BaseChatModel) -> dict:
         return {"final_answer": f"讲解生成失败: {str(e)}"}
 
 
-# ── Graph builder ────────────────────────────────────────────────
+# ── 图构建器 ────────────────────────────────────────────────
 
 def _create_verify_with_llm(llm: BaseChatModel):
-    """Factory to inject LLM into verify node."""
+    """工厂函数：将 LLM 注入 verify 节点。"""
     def _verify(state: RAGState) -> dict:
         return _verify_node(state, llm)
     return _verify
 
 
 def _create_generate_with_llm(llm: BaseChatModel):
-    """Factory to inject LLM into generate node."""
+    """工厂函数：将 LLM 注入 generate 节点。"""
     def _generate(state: RAGState) -> dict:
         return _generate_node(state, llm)
     return _generate
@@ -151,14 +151,14 @@ def _create_generate_with_llm(llm: BaseChatModel):
 
 def build_rag_graph(llm: Optional[BaseChatModel] = None) -> StateGraph:
     """
-    Build the POI identification RAG LangGraph state machine.
+    构建 POI 识别 RAG LangGraph 状态机。
 
     Args:
-        llm: LangChain chat model for verification and generation.
-             Defaults to the DeepSeek model configured in .env.
+        llm: 用于验证和生成的 LangChain 对话模型。
+             默认使用 .env 中配置的 DeepSeek 模型。
 
     Returns:
-        Compiled LangGraph StateGraph.
+        编译后的 LangGraph StateGraph。
     """
     if llm is None:
         llm = ChatOpenAI(
@@ -170,13 +170,13 @@ def build_rag_graph(llm: Optional[BaseChatModel] = None) -> StateGraph:
 
     graph = StateGraph(RAGState)
 
-    # Add nodes.
+    # 添加节点。
     graph.add_node("retrieve", _retrieve_node)
     graph.add_node("auto_merge", _auto_merge_node)
     graph.add_node("verify", _create_verify_with_llm(llm))
     graph.add_node("generate", _create_generate_with_llm(llm))
 
-    # Define edges.
+    # 定义边。
     graph.set_entry_point("retrieve")
     graph.add_edge("retrieve", "auto_merge")
     graph.add_edge("auto_merge", "verify")
@@ -186,5 +186,5 @@ def build_rag_graph(llm: Optional[BaseChatModel] = None) -> StateGraph:
     return graph.compile()
 
 
-# Module-level singleton, aligned with SuperMew pattern.
+# 模块级单例，对齐 SuperMew 模式。
 rag_graph = build_rag_graph()

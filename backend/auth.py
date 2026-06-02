@@ -1,8 +1,8 @@
 """
-Simple admin-only authentication.
+简单的仅限管理员的认证机制。
 
-For testing purposes, uses a hardcoded admin token.
-No user registration — single admin with full permissions.
+出于测试目的，使用硬编码的管理员令牌。
+无用户注册 — 单一管理员拥有全部权限。
 """
 
 import os
@@ -14,7 +14,7 @@ security = HTTPBearer(auto_error=False)
 
 
 def verify_admin(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> bool:
-    """Verify the request has a valid admin token."""
+    """验证请求是否携带有效的管理员令牌。"""
     if credentials is None:
         raise HTTPException(status_code=401, detail="需要认证")
     if credentials.credentials != ADMIN_TOKEN:

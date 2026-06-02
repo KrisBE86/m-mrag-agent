@@ -1,13 +1,13 @@
 """
-Multi-model embedding service: ChineseCLIP (image/text) + BGE-M3 (text dense) + BM25 (text sparse).
+多模型 Embedding 服务：ChineseCLIP（图像/文本）+ BGE-M3（文本稠密）+ BM25（文本稀疏）。
 
-- ChineseCLIPEmbeddings: wraps cn-clip for image→image and short text→image cross-modal search.
-  Outputs 768-dim L2-normalized vectors for Image Milvus Collection.
-- BGEM3Embeddings: wraps sentence-transformers BAAI/bge-m3 for long-text semantic search.
-  Outputs 1024-dim L2-normalized vectors for Text Milvus Collection (dense field).
-- ChineseBM25: custom BM25 implementation for Chinese keyword search.
-  Persists vocabulary + document frequency to JSON. Outputs sparse vectors for Text Milvus Collection.
-- Singleton instances at module level, aligned with SuperMew pattern.
+- ChineseCLIPEmbeddings：封装 cn-clip，用于图像→图像和短文本→图像跨模态搜索。
+  输出 768 维 L2 归一化向量，存入 Image Milvus Collection。
+- BGEM3Embeddings：封装 sentence-transformers BAAI/bge-m3，用于长文本语义搜索。
+  输出 1024 维 L2 归一化向量，存入 Text Milvus Collection（dense 字段）。
+- ChineseBM25：自定义中文 BM25 实现，用于关键词搜索。
+  将词表 + 文档频率持久化到 JSON。输出稀疏向量，存入 Text Milvus Collection。
+- 模块级单例实例，对齐 SuperMew 模式。
 """
 
 import json
@@ -30,16 +30,16 @@ _DEFAULT_BM25_STATE_PATH = Path(__file__).resolve().parent.parent / "data" / "bm
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Chinese-CLIP embeddings (image + short text, 768d)
+# Chinese-CLIP Embedding（图像 + 短文本，768 维）
 # ═══════════════════════════════════════════════════════════════════
 
 class ChineseCLIPEmbeddings:
-    """Chinese-CLIP ViT-L/14 wrapper for image and short-text embeddings.
+    """Chinese-CLIP ViT-L/14 封装，用于图像和短文本 Embedding。
 
-    Both modalities map into the same L2-normalized 768d space,
-    enabling cross-modal image↔text search within the same vector field.
+    两种模态映射到相同的 L2 归一化 768 维空间，
+    支持在同一个向量字段中进行跨模态图像↔文本搜索。
 
-    Uses the official cn-clip package (pip install cn-clip).
+    使用官方 cn-clip 包（pip install cn-clip）。
     """
 
     def __init__(
@@ -69,7 +69,7 @@ class ChineseCLIPEmbeddings:
         return self._dim_map.get(self._model_name, 768)
 
     def embed_image(self, image) -> List[float]:
-        """Embed a single image (file path str, Path, or PIL Image). Returns 768d list."""
+        """对单张图像编码（支持文件路径 str、Path 或 PIL Image）。返回 768 维列表。"""
         from PIL import Image
 
         if isinstance(image, (str, Path)):
@@ -81,11 +81,11 @@ class ChineseCLIPEmbeddings:
         return features.cpu().numpy().flatten().tolist()
 
     def embed_images(self, images: list) -> List[List[float]]:
-        """Batch-embed multiple images."""
+        """批量编码多张图像。"""
         return [self.embed_image(img) for img in images]
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a short Chinese text query (≤77 tokens) into image space."""
+        """将中文短文本查询（≤77 tokens）编码到图像空间。"""
         import cn_clip.clip as clip
 
         text_tokens = clip.tokenize([text]).to(self._device)
@@ -95,19 +95,19 @@ class ChineseCLIPEmbeddings:
         return features.cpu().numpy().flatten().tolist()
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple short texts."""
+        """批量编码多条短文本。"""
         return [self.embed_query(t) for t in texts]
 
 
 # ═══════════════════════════════════════════════════════════════════
-# BGE-M3 dense text embeddings (1024d, semantic search)
+# BGE-M3 稠密文本 Embedding（1024 维，语义搜索）
 # ═══════════════════════════════════════════════════════════════════
 
 class BGEM3Embeddings:
-    """BGE-M3 dense text embeddings for semantic search.
+    """BGE-M3 稠密文本 Embedding，用于语义搜索。
 
-    Wraps sentence-transformers. Outputs 1024-dim L2-normalized vectors.
-    Used for Text Milvus Collection (dense_embedding field).
+    封装 sentence-transformers。输出 1024 维 L2 归一化向量。
+    用于 Text Milvus Collection（dense_embedding 字段）。
     """
 
     def __init__(
@@ -131,14 +131,14 @@ class BGEM3Embeddings:
         return self._model.get_sentence_embedding_dimension()
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a single query text."""
+        """对单条查询文本编码。"""
         embedding = self._model.encode(
             text, normalize_embeddings=True, show_progress_bar=False,
         )
         return embedding.tolist()
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Batch-embed multiple documents."""
+        """批量编码多条文档。"""
         if not texts:
             return []
         embeddings = self._model.encode(
@@ -148,16 +148,16 @@ class BGEM3Embeddings:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# BM25 sparse text embeddings (keyword search)
+# BM25 稀疏文本 Embedding（关键词搜索）
 # ═══════════════════════════════════════════════════════════════════
 
 class ChineseBM25:
-    """BM25 sparse vector service with Chinese tokenization.
+    """BM25 稀疏向量服务，支持中文分词。
 
-    Tokenizes: Chinese single-char + English word-level.
-    Persists vocabulary + document frequency to JSON.
+    分词方式：中文逐字 + 英文词级。
+    将词表 + 文档频率持久化到 JSON。
 
-    Aligned with SuperMew's BM25 implementation.
+    对齐 SuperMew 的 BM25 实现。
     """
 
     def __init__(self, state_path: Optional[Path | str] = None):
@@ -166,7 +166,7 @@ class ChineseBM25:
         )
         self._lock = threading.Lock()
 
-        # BM25 parameters
+        # BM25 参数
         self.k1 = 1.5
         self.b = 0.75
 
@@ -179,7 +179,7 @@ class ChineseBM25:
 
         self._load_state()
 
-    # ── persistence ──────────────────────────────────────────────
+    # ── 持久化 ───────────────────────────────────────────────────
 
     def _recompute_avg_len(self) -> None:
         self._avg_doc_len = (
@@ -223,10 +223,10 @@ class ChineseBM25:
         with self._lock:
             self._persist_unlocked()
 
-    # ── incremental updates (aligned with SuperMew) ──────────────
+    # ── 增量更新（对齐 SuperMew）────────────────────────────────
 
     def increment_add_documents(self, texts: list[str]) -> None:
-        """Incrementally add documents to BM25 statistics."""
+        """增量添加文档到 BM25 统计。"""
         if not texts:
             return
         with self._lock:
@@ -244,7 +244,7 @@ class ChineseBM25:
             self._persist_unlocked()
 
     def increment_remove_documents(self, texts: list[str]) -> None:
-        """Incrementally remove documents from BM25 statistics."""
+        """增量从 BM25 统计中移除文档。"""
         if not texts:
             return
         with self._lock:
@@ -262,10 +262,10 @@ class ChineseBM25:
             self._recompute_avg_len()
             self._persist_unlocked()
 
-    # ── tokenization ─────────────────────────────────────────────
+    # ── 分词 ────────────────────────────────────────────────────
 
     def tokenize(self, text: str) -> list[str]:
-        """Chinese single-char + English word-level tokenization."""
+        """中文逐字 + 英文词级分词。"""
         text = text.lower()
         tokens: list[str] = []
         chinese_pattern = re.compile(r"[一-鿿]")
@@ -285,7 +285,7 @@ class ChineseBM25:
                 i += 1
         return tokens
 
-    # ── sparse vector generation ────────────────────────────────
+    # ── 稀疏向量生成 ───────────────────────────────────────────
 
     def _sparse_vector_for_text_unlocked(self, text: str) -> tuple[dict, bool]:
         tokens = self.tokenize(text)
@@ -317,7 +317,7 @@ class ChineseBM25:
         return sparse_vector, vocab_changed
 
     def get_sparse_embedding(self, text: str) -> dict:
-        """Generate a BM25 sparse vector dict for a single text."""
+        """为单条文本生成 BM25 稀疏向量字典。"""
         with self._lock:
             sparse_vector, vocab_changed = self._sparse_vector_for_text_unlocked(text)
             if vocab_changed:
@@ -325,7 +325,7 @@ class ChineseBM25:
         return sparse_vector
 
     def get_sparse_embeddings(self, texts: list[str]) -> list[dict]:
-        """Generate BM25 sparse vector dicts for a list of texts."""
+        """为多条文本批量生成 BM25 稀疏向量字典。"""
         if not texts:
             return []
         with self._lock:
@@ -341,7 +341,7 @@ class ChineseBM25:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Module-level singletons (aligned with SuperMew pattern)
+# 模块级单例（对齐 SuperMew 模式）
 # ═══════════════════════════════════════════════════════════════════
 
 clip_embeddings = ChineseCLIPEmbeddings(

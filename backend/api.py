@@ -1,5 +1,5 @@
 """
-API routes: chat (sync + SSE streaming) and document management.
+API 路由：聊天（同步 + SSE 流式）和文档管理。
 """
 
 import json
@@ -25,7 +25,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ── Request/Response models ──────────────────────────────────────
+# ── 请求/响应模型 ──────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -35,11 +35,11 @@ class ChatResponse(BaseModel):
     response: str
 
 
-# ── Chat routes ──────────────────────────────────────────────────
+# ── 聊天路由 ──────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, _: bool = Depends(verify_admin)):
-    """Synchronous chat endpoint."""
+    """同步聊天接口。"""
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
     try:
@@ -51,7 +51,7 @@ async def chat(req: ChatRequest, _: bool = Depends(verify_admin)):
 
 @router.post("/chat/stream")
 async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)):
-    """SSE streaming chat endpoint, following SuperMew's async generator pattern."""
+    """SSE 流式聊天接口，遵循 SuperMew 的异步生成器模式。"""
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
 
@@ -66,7 +66,7 @@ async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)
     )
 
 
-# ── Document management routes (admin only) ──────────────────────
+# ── 文档管理路由（仅管理员） ──────────────────────
 
 @router.post("/documents/upload")
 async def upload_document(
@@ -74,7 +74,7 @@ async def upload_document(
     use_llm_naming: bool = False,
     _: bool = Depends(verify_admin),
 ):
-    """Upload and ingest a document (PDF/Word)."""
+    """上传并录入文档（PDF/Word）。"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
 
@@ -82,12 +82,12 @@ async def upload_document(
     if not (file_lower.endswith(".pdf") or file_lower.endswith((".docx", ".doc"))):
         raise HTTPException(status_code=400, detail="仅支持 PDF 和 Word 文件")
 
-    # Save uploaded file.
+    # 保存上传的文件。
     safe_name = Path(file.filename).name
     file_path = UPLOAD_DIR / safe_name
     content = await file.read()
 
-    # Check for duplicate — clean old data first if re-uploading.
+    # 检查重复 — 如果是重新上传，先清理旧数据。
     is_reupload = file_path.exists()
     if is_reupload:
         from backend.milvus_client import milvus_manager
@@ -96,7 +96,7 @@ async def upload_document(
 
         filter_expr = f'filename == "{safe_name}"'
         try:
-            # Remove BM25 stats.
+            # 移除 BM25 统计信息。
             rows = milvus_manager.query(
                 collection=milvus_manager.text_collection,
                 filter_expr=filter_expr,
@@ -116,7 +116,7 @@ async def upload_document(
 
     file_path.write_bytes(content)
 
-    # Ingest into the system.
+    # 录入系统。
     try:
         ingest_document(str(file_path), use_llm_naming=use_llm_naming)
     except Exception as e:
@@ -131,7 +131,7 @@ async def upload_document(
 
 @router.get("/documents")
 async def list_documents(_: bool = Depends(verify_admin)):
-    """List uploaded documents."""
+    """列出已上传的文档。"""
     docs = []
     if UPLOAD_DIR.exists():
         for f in sorted(UPLOAD_DIR.iterdir()):
@@ -146,7 +146,7 @@ async def list_documents(_: bool = Depends(verify_admin)):
 
 @router.delete("/documents/{filename}")
 async def delete_document(filename: str, _: bool = Depends(verify_admin)):
-    """Delete an uploaded document and its chunks from Milvus + PostgreSQL."""
+    """删除已上传的文档及其在 Milvus 和 PostgreSQL 中的所有数据块。"""
     from backend.milvus_client import milvus_manager
     from backend.embedding import bm25
     from backend.parent_chunk_store import parent_chunk_store
@@ -155,10 +155,10 @@ async def delete_document(filename: str, _: bool = Depends(verify_admin)):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    # Delete from Milvus (both collections).
+    # 从 Milvus 中删除（两个集合）。
     filter_expr = f'filename == "{filename}"'
     try:
-        # Remove BM25 stats for text chunks.
+        # 移除文本块的 BM25 统计信息。
         rows = milvus_manager.query(
             collection=milvus_manager.text_collection,
             filter_expr=filter_expr,
@@ -172,10 +172,10 @@ async def delete_document(filename: str, _: bool = Depends(verify_admin)):
         milvus_manager.delete(milvus_manager.text_collection, filter_expr)
         milvus_manager.delete(milvus_manager.image_collection, filter_expr)
 
-        # Delete from PostgreSQL.
+        # 从 PostgreSQL 中删除。
         parent_chunk_store.delete_by_filename(filename)
 
-        # Delete file.
+        # 删除文件。
         file_path.unlink()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
@@ -183,14 +183,14 @@ async def delete_document(filename: str, _: bool = Depends(verify_admin)):
     return {"status": "ok", "filename": filename}
 
 
-# ── Image upload for chat (saves to disk, returns real path) ──────
+# ── 聊天图片上传（保存到磁盘，返回真实路径） ──────
 
 @router.post("/images/upload")
 async def upload_image(
     file: UploadFile = File(...),
     _: bool = Depends(verify_admin),
 ):
-    """Upload an image file for agent identification. Returns the server path."""
+    """上传图片供 Agent 识别。返回服务器端文件路径。"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
 
@@ -198,7 +198,7 @@ async def upload_image(
     if not file_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")):
         raise HTTPException(status_code=400, detail="仅支持 JPG/PNG/GIF/BMP/WEBP 图片")
 
-    # Use UUID to avoid name collisions.
+    # 使用 UUID 避免文件名冲突。
     suffix = Path(file.filename).suffix.lower()
     safe_name = f"{uuid.uuid4().hex}{suffix}"
     file_path = IMAGE_UPLOAD_DIR / safe_name
@@ -214,5 +214,5 @@ async def upload_image(
 
 @router.post("/auth/verify")
 async def verify_token(_: bool = Depends(verify_admin)):
-    """Verify admin token is valid."""
+    """验证管理员 token 是否有效。"""
     return {"status": "ok", "role": "admin", "username": "admin"}
