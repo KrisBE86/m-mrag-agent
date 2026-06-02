@@ -65,13 +65,27 @@ def _sse_event(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def chat_sync(user_message: str, config: Optional[dict] = None) -> str:
+def _build_user_message(text: str, image_path: str | None = None) -> str:
+    """构造发送给 Agent 的用户消息。
+
+    以中性方式传递图片路径（作为上下文信息），而不是给 Agent 下"请识别"指令。
+    让 Agent 根据对话历史和问题内容自行判断是否需要调用识图工具。
+    """
+    if not image_path:
+        return text or "你好"
+    if text:
+        return f"[用户上传了图片: {image_path}]\n\n{text}"
+    return f"[用户上传了图片: {image_path}]\n\n请帮我看看这张图片"
+
+
+def chat_sync(user_message: str, image_path: str | None = None, config: Optional[dict] = None) -> str:
     """
     同步对话: 调用 agent 并返回响应文本。
     """
     cfg = config or DEFAULT_CONFIG
+    content = _build_user_message(user_message, image_path)
     result = _sync_agent.invoke(
-        {"messages": [{"role": "user", "content": user_message}]},
+        {"messages": [{"role": "user", "content": content}]},
         config=cfg,
     )
     return result["messages"][-1].content
@@ -79,6 +93,7 @@ def chat_sync(user_message: str, config: Optional[dict] = None) -> str:
 
 async def chat_stream(
     user_message: str,
+    image_path: str | None = None,
     config: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """
@@ -95,6 +110,8 @@ async def chat_stream(
     agent = _get_async_agent()
     cfg = config or DEFAULT_CONFIG
 
+    content = _build_user_message(user_message, image_path)
+
     text_buffer: str = ""
 
     def _flush_as_thinking():
@@ -106,7 +123,7 @@ async def chat_stream(
 
     try:
         async for msg, metadata in agent.astream(
-            {"messages": [{"role": "user", "content": user_message}]},
+            {"messages": [{"role": "user", "content": content}]},
             config=cfg,
             stream_mode="messages",
         ):

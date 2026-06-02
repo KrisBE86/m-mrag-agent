@@ -29,6 +29,7 @@ IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChatRequest(BaseModel):
     message: str
+    image_path: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -40,10 +41,10 @@ class ChatResponse(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, _: bool = Depends(verify_admin)):
     """同步聊天接口。"""
-    if not req.message.strip():
+    if not req.message.strip() and not req.image_path:
         raise HTTPException(status_code=400, detail="消息不能为空")
     try:
-        response = chat_sync(req.message)
+        response = chat_sync(req.message, req.image_path)
         return ChatResponse(response=response)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"聊天失败: {str(e)}")
@@ -52,11 +53,11 @@ async def chat(req: ChatRequest, _: bool = Depends(verify_admin)):
 @router.post("/chat/stream")
 async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)):
     """SSE 流式聊天接口，遵循 SuperMew 的异步生成器模式。"""
-    if not req.message.strip():
+    if not req.message.strip() and not req.image_path:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     return StreamingResponse(
-        chat_stream(req.message),
+        chat_stream(req.message, req.image_path),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",

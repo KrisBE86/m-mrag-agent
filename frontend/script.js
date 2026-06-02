@@ -66,8 +66,9 @@ createApp({
             if (!text && !this.selectedImage) return;
             if (this.isStreaming) return;
 
-            // If there's an image, upload it FIRST to get a real server path.
-            let message = text;
+            // 如果有图片，先上传获取服务端路径。不再在消息中下"请识别"指令，
+            // 而是以中性方式传递图片路径，让 Agent 根据对话历史自行判断是否需要识图。
+            let imagePath = null;
             if (this.selectedImageFile) {
                 try {
                     const formData = new FormData();
@@ -79,10 +80,7 @@ createApp({
                     });
                     if (uploadResp.ok) {
                         const uploadResult = await uploadResp.json();
-                        const serverPath = uploadResult.image_path;
-                        message = text
-                            ? `请识别这张图片: ${serverPath}\n\n${text}`
-                            : `请识别这张图片: ${serverPath}`;
+                        imagePath = uploadResult.image_path;
                     } else {
                         this.messages.push({ role: 'bot', text: '【错误】图片上传失败，请重试' });
                         return;
@@ -113,10 +111,13 @@ createApp({
             const botMsgIdx = this.messages.length - 1;
 
             try {
+                const requestBody = { message: text || '' };
+                if (imagePath) requestBody.image_path = imagePath;
+
                 const response = await fetch('/chat/stream', {
                     method: 'POST',
                     headers: this.authHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ message }),
+                    body: JSON.stringify(requestBody),
                     signal: this.abortController.signal,
                 });
 
