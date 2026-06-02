@@ -32,5 +32,6 @@ dependencies = [
     "docx2txt>=0.9",
     # Utilities
     "python-dotenv>=1.2",
+    "httpx>=0.28",
     "httpx-sse>=0.4",
 ]

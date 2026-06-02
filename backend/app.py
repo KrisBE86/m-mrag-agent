@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.api import router as api_router
 from backend.database import init_db
+from backend.unity_api import router as unity_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(api_router)
+    app.include_router(unity_router)
 
     # 在根路径提供前端静态文件服务。
     if FRONTEND_DIR.exists():
