@@ -29,3 +29,7 @@ data/reference_images/
 agent_memory.db
 agent_memory.db-shm
 agent_memory.db-wal
+
+# Claude Code
+CLAUDE.md
+AGENTS.md
