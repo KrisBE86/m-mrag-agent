@@ -22,15 +22,20 @@ uv sync
 
 ### 2. 配置环境变量
 
-编辑 `.env`，关键配置：
+```bash
+cp .env.example .env
+```
+
+然后编辑 `.env`，填入你自己的 API 密钥等敏感信息。`.env.example` 中已内置所有配置项的默认值，关键需要修改的：
 
 | 变量 | 说明 |
 |------|------|
-| `OPENAI_API_KEY` | DeepSeek API 密钥（必填） |
+| `OPENAI_API_KEY` | DeepSeek API 密钥（**必填**） |
+| `DOUBAO_API_KEY` | 豆包视觉模型 API 密钥（图片识别用） |
 | `STT_APPID` / `STT_ACCESS_KEY` | 火山引擎语音识别（Unity 接入需要） |
 | `TTS_APPID` / `TTS_ACCESS_TOKEN` | 火山引擎语音合成（Unity 接入需要） |
 
-其余配置已内置默认值，一般无需修改。
+其余配置（Milvus、PostgreSQL、Redis、嵌入模型等）已内置默认值，一般无需修改。
 
 ### 3. 启动基础服务
 
