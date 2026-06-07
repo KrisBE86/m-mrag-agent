@@ -121,10 +121,11 @@ async def unity_chat_stream(
 
         # ---- 第 4 步：Agent 流式推理 ----
         agent = await _get_async_agent()
-        from backend.tools import reset_tool_call_guards, set_active_thread_id
+        from backend.tools import reset_tool_call_guards, set_active_thread_id, set_active_user_question
 
         reset_tool_call_guards()
         set_active_thread_id((cfg.get("configurable") or {}).get("thread_id"))
+        set_active_user_question(user_text)
 
         # 阶段分离：缓冲区累积 Agent 文本
         text_buffer: str = ""

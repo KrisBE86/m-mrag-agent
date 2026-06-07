@@ -45,6 +45,16 @@ createApp({
             isUploading: false,
             useLLMNaming: false,
             uploadStatus: null,
+            // Voice input / output
+            isRecording: false,
+            isTranscribing: false,
+            mediaRecorder: null,
+            recordingStream: null,
+            audioChunks: [],
+            voiceStatus: '',
+            playingMessageIndex: null,
+            ttsLoadingIndex: null,
+            currentAudio: null,
             // Auth
             token: localStorage.getItem('mragagent_token') || 'mragagent-admin-token-2026',
             sessionId: initialConversation.sessionId,
@@ -84,6 +94,25 @@ createApp({
             const headers = { ...extra };
             headers.Authorization = `Bearer ${this.token}`;
             return headers;
+        },
+        blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const result = reader.result || '';
+                    resolve(String(result).split(',')[1] || '');
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        },
+        stopCurrentAudio() {
+            if (this.currentAudio) {
+                this.currentAudio.pause();
+                this.currentAudio.currentTime = 0;
+                this.currentAudio = null;
+            }
+            this.playingMessageIndex = null;
         },
         createSessionId() {
             return createChatSessionId();
@@ -150,6 +179,7 @@ createApp({
         },
         selectConversation(conversationId) {
             if (this.isStreaming) return;
+            this.stopCurrentAudio();
             const conv = this.conversations.find(item => item.id === conversationId);
             if (!conv) return;
             this.activeConversationId = conv.id;
@@ -162,6 +192,7 @@ createApp({
         },
         newChat() {
             if (this.isStreaming) this.stopStreaming();
+            this.stopCurrentAudio();
             const conv = createConversation();
             this.conversations.unshift(conv);
             this.activeConversationId = conv.id;
@@ -203,6 +234,7 @@ createApp({
             const text = this.userInput.trim();
             if (!text && !this.selectedImage) return;
             if (this.isStreaming) return;
+            this.stopCurrentAudio();
 
             // 如果有图片，先上传获取服务端路径。不再在消息中下"请识别"指令，
             // 而是以中性方式传递图片路径，让 Agent 根据对话历史自行判断是否需要识图。
@@ -323,6 +355,148 @@ createApp({
                 this.abortController.abort();
             }
             this.isStreaming = false;
+        },
+
+        // ── Voice input / output ─────────────────────────────────
+
+        async toggleRecording() {
+            if (this.isRecording) {
+                this.stopRecording();
+                return;
+            }
+            await this.startRecording();
+        },
+
+        async startRecording() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                this.voiceStatus = '当前浏览器不支持录音';
+                return;
+            }
+
+            try {
+                this.recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                this.audioChunks = [];
+                const options = this.getMediaRecorderOptions();
+                this.mediaRecorder = options ? new MediaRecorder(this.recordingStream, options) : new MediaRecorder(this.recordingStream);
+
+                this.mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        this.audioChunks.push(event.data);
+                    }
+                };
+                this.mediaRecorder.onstop = () => this.handleRecordingStop();
+
+                this.mediaRecorder.start();
+                this.isRecording = true;
+                this.voiceStatus = '正在录音，点击停止';
+            } catch (err) {
+                this.cleanupRecording();
+                this.voiceStatus = '无法访问麦克风: ' + err.message;
+            }
+        },
+
+        getMediaRecorderOptions() {
+            const candidates = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/mp4',
+            ];
+            const mimeType = candidates.find(type => MediaRecorder.isTypeSupported(type));
+            return mimeType ? { mimeType } : null;
+        },
+
+        stopRecording() {
+            if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+                this.mediaRecorder.stop();
+            }
+            this.isRecording = false;
+            this.voiceStatus = '正在识别语音...';
+        },
+
+        cleanupRecording() {
+            if (this.recordingStream) {
+                this.recordingStream.getTracks().forEach(track => track.stop());
+            }
+            this.mediaRecorder = null;
+            this.recordingStream = null;
+            this.audioChunks = [];
+            this.isRecording = false;
+        },
+
+        async handleRecordingStop() {
+            const mimeType = this.mediaRecorder ? this.mediaRecorder.mimeType : 'audio/webm';
+            const audioBlob = new Blob(this.audioChunks, { type: mimeType });
+            this.cleanupRecording();
+
+            if (!audioBlob.size) {
+                this.voiceStatus = '没有录到音频';
+                return;
+            }
+
+            this.isTranscribing = true;
+            try {
+                const audioBase64 = await this.blobToBase64(audioBlob);
+                const response = await fetch('/unity/stt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ audio_base64: audioBase64 }),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || result.detail || '识别失败');
+                }
+
+                const text = (result.text || '').trim();
+                if (text) {
+                    this.userInput = this.userInput ? `${this.userInput} ${text}` : text;
+                    this.voiceStatus = '';
+                    this.$nextTick(() => this.autoResize());
+                } else {
+                    this.voiceStatus = '未识别到语音内容';
+                }
+            } catch (err) {
+                this.voiceStatus = '语音识别失败: ' + err.message;
+            } finally {
+                this.isTranscribing = false;
+            }
+        },
+
+        async toggleSpeech(msg, index) {
+            if (this.playingMessageIndex === index) {
+                this.stopCurrentAudio();
+                return;
+            }
+            if (this.ttsLoadingIndex !== null || !msg.text) return;
+
+            this.stopCurrentAudio();
+            this.ttsLoadingIndex = index;
+            try {
+                const response = await fetch('/tts', {
+                    method: 'POST',
+                    headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ text: msg.text }),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.detail || '语音合成失败');
+                }
+
+                const audio = new Audio(`data:audio/wav;base64,${result.audio_base64}`);
+                this.currentAudio = audio;
+                this.playingMessageIndex = index;
+                audio.onended = () => {
+                    if (this.currentAudio === audio) this.stopCurrentAudio();
+                };
+                audio.onerror = () => {
+                    if (this.currentAudio === audio) this.stopCurrentAudio();
+                };
+                await audio.play();
+            } catch (err) {
+                this.messages.push({ role: 'bot', text: '【错误】语音播放失败: ' + err.message });
+            } finally {
+                this.ttsLoadingIndex = null;
+            }
         },
 
         clearChat() {

@@ -202,36 +202,25 @@ def identify_from_image_vlm(
     top_k: int = 5,
 ) -> str:
     """
-    使用豆包 Vision 描述 → 文本检索进行图像识别。
+    使用豆包 Vision 生成图片的纯视觉描述。
 
-    完全绕过 CLIP，实现细粒度区分：
-    1. 豆包 Vision 生成图像的纯视觉描述
-       （不猜测遗址/场景 — 仅描述可观察特征）。
-    2. 将该描述作为查询，在知识库上执行 BGE-M3 + BM25
-       混合文本检索。
-    3. 结果包含检索到的文本块，附带来自 L1/L2 层级的
-       遗址/洞窟上下文。
-
-    此方法处理同一洞窟 POI 区分的效果远优于
-    CLIP 图像→图像搜索，因为 VLM 能捕捉区分性
-    视觉细节（手势、服饰、空间位置），再与详细的
-    文本描述进行匹配。
+    这个函数只负责图像理解，不直接检索知识库。调用方应将
+    用户原始问题和这里返回的视觉描述一起交给统一的文本 RAG
+    入口，以便复用相关性判别、查询改写和拒答策略。
 
     Args:
         image_path：查询图像文件的路径。
-        top_k：返回的文本检索结果数量。
+        top_k：保留兼容旧工具签名，当前不使用。
 
     Returns:
-        格式化文本，包含视觉描述 + 知识库匹配结果。
+        豆包 Vision 生成的中文视觉描述。
     """
     from backend.vlm_client import describe_image_with_vlm
-    from backend.rag_utils import retrieve_with_context
 
     image_path = Path(image_path)
     if not image_path.exists():
         return f"【错误】图片文件不存在: {image_path}"
 
-    # Step 1：通过豆包 Vision 生成纯视觉描述。
     try:
         with open(image_path, "rb") as f:
             img_bytes = f.read()
@@ -242,19 +231,4 @@ def identify_from_image_vlm(
     if not description:
         return "【错误】视觉描述生成失败，请检查 DOUBAO_API_KEY 配置或火山方舟模型开通状态。"
 
-    # Step 2：将视觉描述作为查询进行文本检索。
-    # BGE-M3 + BM25 混合搜索匹配 L3 块（包括
-    # 摄入时由 VLM 生成的图像描述）。
-    try:
-        context = retrieve_with_context(description, top_k=top_k)
-    except Exception as e:
-        return f"【错误】文本检索失败: {str(e)}"
-
-    # Step 3：格式化组合输出。
-    lines = [
-        f"🔍 视觉描述（豆包 Vision）: {description}",
-        "",
-        f"📚 知识库匹配结果（BGE-M3 + BM25 文本检索）:",
-        context,
-    ]
-    return "\n".join(lines)
+    return description

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from backend.agent_api import chat_sync, chat_stream
 from backend.auth import verify_admin
 from backend.document_loader import ingest_document
+from backend.tts_service import TTS_SAMPLE_RATE, synthesize as tts_synthesize
 
 router = APIRouter()
 
@@ -67,6 +68,16 @@ class ChatResponse(BaseModel):
     response: str
 
 
+class TTSRequest(BaseModel):
+    text: str
+
+
+class TTSResponse(BaseModel):
+    audio_base64: str
+    sample_rate: int
+    encoding: str = "wav"
+
+
 # ── 聊天路由 ──────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
@@ -96,6 +107,20 @@ async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/tts", response_model=TTSResponse)
+async def tts(req: TTSRequest, _: bool = Depends(verify_admin)):
+    """语音合成接口，供 Web 前端调试播放 Agent 回复。"""
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+
+    audio_base64 = await tts_synthesize(text)
+    if not audio_base64:
+        raise HTTPException(status_code=500, detail="TTS 合成失败，请检查配置或后端日志")
+
+    return TTSResponse(audio_base64=audio_base64, sample_rate=TTS_SAMPLE_RATE)
 
 
 # ── 文档管理路由（仅管理员） ──────────────────────

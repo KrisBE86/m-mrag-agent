@@ -15,6 +15,37 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _prepare_image_for_vlm(image_bytes: bytes) -> tuple[bytes, str]:
+    """压缩 VLM 输入图片，降低传输和视觉模型处理耗时。"""
+    max_side = int(os.getenv("VLM_IMAGE_MAX_SIDE", "1280"))
+    jpeg_quality = int(os.getenv("VLM_IMAGE_JPEG_QUALITY", "82"))
+
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        width, height = img.size
+        longest = max(width, height)
+        if longest > max_side:
+            scale = max_side / longest
+            new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        if img.mode == "L":
+            img = img.convert("RGB")
+
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=jpeg_quality, optimize=True)
+        return output.getvalue(), "jpeg"
+    except Exception:
+        return image_bytes, "png"
+
+
 def describe_image_with_vlm(image_bytes: bytes) -> str:
     """使用豆包视觉模型生成图片的纯视觉描述。
 
@@ -34,15 +65,7 @@ def describe_image_with_vlm(image_bytes: bytes) -> str:
         return ""
 
     try:
-        # 检测图片格式。
-        fmt = "png"
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(image_bytes))
-            fmt = img.format.lower() if img.format else "png"
-        except Exception:
-            pass
-
+        image_bytes, fmt = _prepare_image_for_vlm(image_bytes)
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_uri = f"data:image/{fmt};base64,{b64}"
 
@@ -51,7 +74,7 @@ def describe_image_with_vlm(image_bytes: bytes) -> str:
         prompt = (
             "请详细描述这张图片的视觉内容。只描述你看到的内容，不要猜测或识别具体地点、场景名称。"
             "包括：主体类型与数量、姿态与手势、服饰与装饰、空间位置关系、色彩与材质、"
-            "以及其他可辨认的视觉细节。200字以内，中文。"
+            "以及其他可辨认的关键视觉细节。150字以内，中文。"
         )
 
         resp = client.chat.completions.create(
@@ -63,7 +86,7 @@ def describe_image_with_vlm(image_bytes: bytes) -> str:
                     {"type": "text", "text": prompt},
                 ]
             }],
-            max_tokens=300,
+            max_tokens=180,
         )
 
         content = resp.choices[0].message.content

@@ -22,10 +22,10 @@
             </div>
             <nav class="sidebar-nav">
                 <button @click="activePanel = 'chat'" :class="['nav-btn', {active: activePanel === 'chat'}]">
-                    <i class="fas fa-comments"></i> 对话
+                    <i class="fas fa-comments"></i> <span>对话</span>
                 </button>
                 <button @click="activePanel = 'settings'" :class="['nav-btn', {active: activePanel === 'settings'}]">
-                    <i class="fas fa-cog"></i> 文档管理
+                    <i class="fas fa-cog"></i> <span>文档管理</span>
                 </button>
             </nav>
             <div class="conversation-panel">
@@ -103,7 +103,18 @@
                             </details>
                         </div>
                         <!-- Message content -->
-                        <div class="message-content" v-html="msg.role === 'user' ? escapeHtml(msg.text) : parseMarkdown(msg.text)"></div>
+                        <div class="message-body">
+                            <div class="message-content" v-html="msg.role === 'user' ? escapeHtml(msg.text) : parseMarkdown(msg.text)"></div>
+                            <button
+                                v-if="msg.role === 'bot' && msg.text && !msg._streaming"
+                                @click="toggleSpeech(msg, index)"
+                                :class="['speech-btn', {active: playingMessageIndex === index}]"
+                                :disabled="ttsLoadingIndex === index"
+                                :title="playingMessageIndex === index ? '停止播放' : '播放语音'"
+                            >
+                                <i :class="ttsLoadingIndex === index ? 'fas fa-spinner fa-spin' : (playingMessageIndex === index ? 'fas fa-stop' : 'fas fa-volume-up')"></i>
+                            </button>
+                        </div>
                         <!-- RAG trace -->
                         <div v-if="msg.ragTrace" class="message-meta">
                             <details class="rag-details">
@@ -138,11 +149,19 @@
                         <button @click="$refs.imageInput.click()" class="attach-btn" title="上传图片">
                             <i class="fas fa-image"></i>
                         </button>
+                        <button
+                            @click="toggleRecording"
+                            :class="['attach-btn', 'voice-btn', {recording: isRecording}]"
+                            :disabled="isStreaming || isTranscribing"
+                            :title="isRecording ? '停止录音' : '语音输入'"
+                        >
+                            <i :class="isTranscribing ? 'fas fa-spinner fa-spin' : (isRecording ? 'fas fa-stop' : 'fas fa-microphone')"></i>
+                        </button>
                         <textarea
                             v-model="userInput"
                             @keydown="handleKeyDown"
                             @input="autoResize"
-                            placeholder="输入问题，或上传图片让我识别..."
+                            :placeholder="voiceStatus || '输入问题，或上传图片让我识别...'"
                             rows="1"
                             ref="textarea"
                         ></textarea>

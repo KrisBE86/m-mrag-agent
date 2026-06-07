@@ -109,11 +109,12 @@ def chat_sync(
     """
     同步对话: 调用 agent 并返回响应文本。
     """
-    from backend.tools import reset_tool_call_guards, set_active_thread_id
+    from backend.tools import reset_tool_call_guards, set_active_thread_id, set_active_user_question
 
     reset_tool_call_guards()
     cfg = _config_for_session(session_id, config)
     set_active_thread_id(_thread_id_from_config(cfg))
+    set_active_user_question(user_message)
     content = _build_user_message(user_message, image_path)
     result = _sync_agent.invoke(
         {"messages": [{"role": "user", "content": content}]},
@@ -142,10 +143,11 @@ async def chat_stream(
     agent = await _get_async_agent()
     cfg = _config_for_session(session_id, config)
 
-    from backend.tools import reset_tool_call_guards, set_active_thread_id
+    from backend.tools import reset_tool_call_guards, set_active_thread_id, set_active_user_question
 
     reset_tool_call_guards()
     set_active_thread_id(_thread_id_from_config(cfg))
+    set_active_user_question(user_message)
     content = _build_user_message(user_message, image_path)
 
     text_buffer: str = ""
