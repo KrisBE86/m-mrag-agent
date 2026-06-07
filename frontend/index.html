@@ -28,10 +28,33 @@
                     <i class="fas fa-cog"></i> 文档管理
                 </button>
             </nav>
-            <div class="sidebar-footer">
-                <button @click="clearChat" class="danger-btn">
-                    <i class="fas fa-trash-alt"></i> 清空对话
+            <div class="conversation-panel">
+                <button @click="newChat" class="new-chat-btn" title="新增对话">
+                    <i class="fas fa-plus"></i>
+                    <span>新增对话</span>
                 </button>
+                <div class="conversation-list">
+                    <div
+                        v-for="conv in conversations"
+                        :key="conv.id"
+                        @click="selectConversation(conv.id); activePanel = 'chat'"
+                        :class="['conversation-item', {active: conv.id === activeConversationId}]"
+                        :title="conv.title"
+                    >
+                        <i class="fas fa-message"></i>
+                        <span class="conversation-title">{{ conv.title }}</span>
+                        <span class="conversation-time">{{ formatConversationTime(conv.updatedAt) }}</span>
+                        <button
+                            class="conversation-delete"
+                            title="删除对话"
+                            @click.stop="deleteConversation(conv.id)"
+                        >
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-footer">
                 <div class="status-badge" :class="{connected: connected}">
                     <span class="status-dot"></span>
                     {{ connected ? '已连接' : '未连接' }}

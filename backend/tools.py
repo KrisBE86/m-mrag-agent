@@ -16,15 +16,127 @@ Agent 上下文优先路由逻辑：
 """
 
 import re
+from contextvars import ContextVar
 
 from langchain_core.tools import tool
 
 from backend.image_retriever import identify_from_image as _image_identify
 from backend.image_retriever import identify_from_image_vlm as _vlm_identify
-from backend.rag_utils import retrieve_with_context
 
-# Redis 上下文记忆 key（与 agent_api.py 的 CONTEXT_KEY 一致）
-_CONTEXT_KEY = "mragagent:context:main-chat"
+# Redis 上下文记忆 key 前缀。实际 key 按会话 thread_id 隔离。
+_CONTEXT_KEY_PREFIX = "mragagent:context"
+_ACTIVE_THREAD_ID: ContextVar[str] = ContextVar("mragagent_thread_id", default="main-chat")
+_ACTIVE_THREAD_ID_FALLBACK = "main-chat"
+_LAST_RAG_CONTEXT: dict | None = None
+_KNOWLEDGE_TOOL_CALLS_THIS_TURN = 0
+
+
+def _safe_thread_id(thread_id: str | None) -> str:
+    raw = (thread_id or "main-chat").strip() or "main-chat"
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", raw)
+
+
+def set_active_thread_id(thread_id: str | None) -> None:
+    """设置当前工具调用使用的会话 ID，用于隔离 Redis 中的 POI 上下文。"""
+    global _ACTIVE_THREAD_ID_FALLBACK
+    safe_id = _safe_thread_id(thread_id)
+    _ACTIVE_THREAD_ID_FALLBACK = safe_id
+    _ACTIVE_THREAD_ID.set(safe_id)
+
+
+def _context_key() -> str:
+    thread_id = _ACTIVE_THREAD_ID.get()
+    if thread_id == "main-chat" and _ACTIVE_THREAD_ID_FALLBACK != "main-chat":
+        thread_id = _ACTIVE_THREAD_ID_FALLBACK
+    return f"{_CONTEXT_KEY_PREFIX}:{thread_id}"
+
+
+def _set_last_rag_context(context: dict) -> None:
+    global _LAST_RAG_CONTEXT
+    _LAST_RAG_CONTEXT = context
+
+
+def get_last_rag_context(clear: bool = True) -> dict | None:
+    """获取最近一次 RAG 检索 trace，供 API 层或调试面板读取。"""
+    global _LAST_RAG_CONTEXT
+    context = _LAST_RAG_CONTEXT
+    if clear:
+        _LAST_RAG_CONTEXT = None
+    return context
+
+
+def reset_tool_call_guards() -> None:
+    """每轮对话开始时重置知识库工具调用限制。"""
+    global _KNOWLEDGE_TOOL_CALLS_THIS_TURN
+    _KNOWLEDGE_TOOL_CALLS_THIS_TURN = 0
+
+
+def _format_doc_header(doc: dict, index: int) -> str:
+    title = doc.get("poi_name") or doc.get("filename") or "未知文物点"
+    site = doc.get("site", "")
+    cave = doc.get("cave", "")
+    score = doc.get("score")
+    rerank_score = doc.get("rerank_score")
+
+    parts = [f"[{index}] {title}"]
+    location = f"{site} {cave}".strip()
+    if location:
+        parts.append(f"位置: {location}")
+    if score is not None:
+        try:
+            parts.append(f"相似度: {float(score):.4f}")
+        except (TypeError, ValueError):
+            pass
+    if rerank_score is not None:
+        try:
+            parts.append(f"重排分: {float(rerank_score):.4f}")
+        except (TypeError, ValueError):
+            pass
+    if doc.get("merged_from_children"):
+        parts.append("自动合并父块")
+    return " | ".join(parts)
+
+
+def _format_rag_result(rag_result: dict) -> str:
+    docs = rag_result.get("docs", []) if isinstance(rag_result, dict) else []
+    rag_trace = rag_result.get("rag_trace", {}) if isinstance(rag_result, dict) else {}
+    if rag_trace:
+        _set_last_rag_context({"rag_trace": rag_trace})
+
+    if not docs:
+        return "【未找到相关内容】知识库中没有检索到足够相关的资料。"
+
+    sections = []
+    grade_score = rag_trace.get("grade_score", "unknown")
+    retrieval_stage = rag_trace.get("retrieval_stage", "unknown")
+    rewrite_needed = bool(rag_trace.get("rewrite_needed"))
+    expansion_type = rag_trace.get("expansion_type") or "none"
+    sections.append(
+        "【RAG流程】"
+        f"初检 → 相关性评分={grade_score} → "
+        f"{'查询改写/扩展检索' if rewrite_needed else '直接使用初检结果'}；"
+        f"最终阶段={retrieval_stage}；扩展策略={expansion_type}"
+    )
+
+    if rag_trace.get("rewrite_needed"):
+        strategy = rag_trace.get("rewrite_strategy") or rag_trace.get("expansion_type") or "unknown"
+        sections.append(f"【检索修正】首次检索相关性不足，已使用 {strategy} 策略扩展查询并重新检索。")
+        step_back_question = rag_trace.get("step_back_question")
+        step_back_answer = rag_trace.get("step_back_answer")
+        if step_back_question or step_back_answer:
+            sections.append(
+                "【Step-back】\n"
+                f"退步问题：{step_back_question or '无'}\n"
+                f"退步答案：{step_back_answer or '无'}"
+            )
+
+    formatted = []
+    for i, doc in enumerate(docs, 1):
+        text = doc.get("text", "")
+        formatted.append(f"{_format_doc_header(doc, i)}\n{text}")
+
+    sections.append("【知识库检索结果】\n" + "\n\n---\n\n".join(formatted))
+    return "\n\n".join(sections)
 
 
 def _extract_poi_name(result_text: str) -> str | None:
@@ -48,11 +160,11 @@ def _cache_identified_poi(result_text: str) -> None:
 
     from backend.cache import cache
 
-    existing = cache.get_json(_CONTEXT_KEY) or {"pois": []}
+    existing = cache.get_json(_context_key()) or {"pois": []}
     # 避免重复添加
     if not any(p["name"] == name for p in existing["pois"]):
         existing["pois"].append({"name": name, "location": location})
-        cache.set_json(_CONTEXT_KEY, existing, ttl=3600)
+        cache.set_json(_context_key(), existing, ttl=3600)
 
 
 @tool
@@ -73,7 +185,7 @@ def recall_conversation_context(user_question: str) -> str:
     """
     from backend.cache import cache
 
-    context = cache.get_json(_CONTEXT_KEY)
+    context = cache.get_json(_context_key())
     if not context or not context.get("pois"):
         return (
             "【上下文空白】当前对话中还没有识别过任何文物点。"
@@ -151,4 +263,15 @@ def search_knowledge_base(query: str) -> str:
     返回:
         知识库中检索到的相关内容，经过语义搜索和自动合并。
     """
-    return retrieve_with_context(query)
+    global _KNOWLEDGE_TOOL_CALLS_THIS_TURN
+    if _KNOWLEDGE_TOOL_CALLS_THIS_TURN >= 1:
+        return (
+            "TOOL_CALL_LIMIT_REACHED: 本轮已经调用过 search_knowledge_base。"
+            "请直接基于已有检索结果回答，不要再次调用工具。"
+        )
+    _KNOWLEDGE_TOOL_CALLS_THIS_TURN += 1
+
+    from backend.rag_pipeline import run_rag_graph
+
+    rag_result = run_rag_graph(query)
+    return _format_rag_result(rag_result)

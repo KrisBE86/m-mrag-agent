@@ -30,7 +30,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .sidebar-header { display: flex; align-items: center; gap: 12px; padding: 20px; border-bottom: 1px solid rgba(255,255,255,.1); }
 .sidebar-header .logo-icon { font-size: 28px; }
 .sidebar-header h2 { font-size: 18px; font-weight: 600; color: #fff; }
-.sidebar-nav { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.sidebar-nav { padding: 12px; display: flex; flex-direction: column; gap: 4px; }
 .nav-btn {
     display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     background: transparent; color: var(--sidebar-text); border: none; border-radius: 8px;
@@ -38,6 +38,79 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 }
 .nav-btn:hover { background: rgba(255,255,255,.08); }
 .nav-btn.active { background: var(--sidebar-active); color: #fff; }
+.conversation-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 12px 12px;
+}
+.new-chat-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 12px;
+    background: rgba(255,255,255,.08);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.16);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .15s;
+}
+.new-chat-btn:hover { background: rgba(255,255,255,.14); }
+.conversation-list {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 2px;
+}
+.conversation-item {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto 22px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 6px 8px 10px;
+    border-radius: 8px;
+    color: var(--sidebar-text);
+    cursor: pointer;
+    font-size: 13px;
+    transition: background .15s, color .15s;
+}
+.conversation-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+.conversation-item.active { background: rgba(59,130,246,.28); color: #fff; }
+.conversation-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.conversation-time {
+    color: rgba(203,213,225,.68);
+    font-size: 11px;
+    white-space: nowrap;
+}
+.conversation-delete {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: rgba(203,213,225,.72);
+    cursor: pointer;
+    opacity: 0;
+    transition: all .15s;
+}
+.conversation-item:hover .conversation-delete,
+.conversation-item.active .conversation-delete { opacity: 1; }
+.conversation-delete:hover { background: rgba(248,113,113,.18); color: #fca5a5; }
 .sidebar-footer { padding: 12px; border-top: 1px solid rgba(255,255,255,.1); display: flex; flex-direction: column; gap: 8px; }
 .danger-btn { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: transparent; color: #f87171; border: 1px solid rgba(248,113,113,.3); border-radius: 8px; cursor: pointer; font-size: 13px; transition: all .15s; }
 .danger-btn:hover { background: rgba(248,113,113,.15); }

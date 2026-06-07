@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from backend.agent_api import (
-    DEFAULT_CONFIG,
     _build_user_message,
     _extract_content,
     _get_async_agent,
@@ -44,6 +43,14 @@ logger = logging.getLogger(__name__)
 
 # 用户上传图片的保存目录（与 api.py 中的 /images/upload 一致）
 USER_UPLOADS_DIR = Path("data/user_uploads")
+
+# Unity 端不传 session_id。按后端进程生命周期生成一个会话：
+# 同一次后端启动内保持连续上下文；重启后自动换新会话。
+UNITY_PROCESS_THREAD_ID = f"unity-{uuid.uuid4().hex}"
+
+
+def _unity_default_config() -> dict:
+    return {"configurable": {"thread_id": UNITY_PROCESS_THREAD_ID}}
 
 
 def _sse_named_event(event: str, data: dict) -> str:
@@ -71,12 +78,12 @@ async def unity_chat_stream(
     参数:
         audio_base64: Unity 发来的 Base64 音频数据（WAV/PCM）。
         image_base64: 可选，Unity 发来的 Base64 图片数据（JPEG/PNG）。
-        config: LangGraph 配置（thread_id 等），默认使用 DEFAULT_CONFIG。
+        config: LangGraph 配置（thread_id 等）。不传时使用本进程 Unity 会话。
 
     Yields:
         SSE 格式化字符串，事件类型为 thinking / token / text / audio / done。
     """
-    cfg = config or DEFAULT_CONFIG
+    cfg = config or _unity_default_config()
     temp_image_path: Optional[Path] = None
 
     # ---- 第 1 步：STT 语音识别 ----
@@ -114,6 +121,10 @@ async def unity_chat_stream(
 
         # ---- 第 4 步：Agent 流式推理 ----
         agent = await _get_async_agent()
+        from backend.tools import reset_tool_call_guards, set_active_thread_id
+
+        reset_tool_call_guards()
+        set_active_thread_id((cfg.get("configurable") or {}).get("thread_id"))
 
         # 阶段分离：缓冲区累积 Agent 文本
         text_buffer: str = ""

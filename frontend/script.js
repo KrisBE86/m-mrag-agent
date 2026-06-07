@@ -1,9 +1,33 @@
 const { createApp } = Vue;
+const CHAT_HISTORY_KEY = 'mragagent_chat_conversations_v1';
+
+function createChatSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return `web-${window.crypto.randomUUID()}`;
+    }
+    return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createConversation() {
+    const now = Date.now();
+    const id = createChatSessionId();
+    return {
+        id,
+        sessionId: id,
+        title: '新对话',
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+    };
+}
 
 createApp({
     data() {
+        const initialConversation = createConversation();
         return {
-            messages: [],
+            conversations: [initialConversation],
+            activeConversationId: initialConversation.id,
+            messages: initialConversation.messages,
             userInput: '',
             isLoading: false,
             isStreaming: false,
@@ -23,10 +47,12 @@ createApp({
             uploadStatus: null,
             // Auth
             token: localStorage.getItem('mragagent_token') || 'mragagent-admin-token-2026',
+            sessionId: initialConversation.sessionId,
         };
     },
     mounted() {
         localStorage.setItem('mragagent_token', this.token);
+        this.loadConversations();
         this.configureMarked();
         this.autoResize();
     },
@@ -58,6 +84,117 @@ createApp({
             const headers = { ...extra };
             headers.Authorization = `Bearer ${this.token}`;
             return headers;
+        },
+        createSessionId() {
+            return createChatSessionId();
+        },
+        sanitizeMessages(messages) {
+            return (messages || []).map(msg => {
+                const copy = { ...msg };
+                delete copy._streaming;
+                return copy;
+            });
+        },
+        conversationTitle(messages) {
+            const firstUser = (messages || []).find(msg => msg.role === 'user' && msg.text);
+            if (!firstUser) return '新对话';
+            return firstUser.text.replace(/\s+/g, ' ').trim().slice(0, 24) || '图片对话';
+        },
+        activeConversation() {
+            return this.conversations.find(conv => conv.id === this.activeConversationId);
+        },
+        persistConversations() {
+            const payload = this.conversations
+                .map(conv => ({
+                    ...conv,
+                    messages: this.sanitizeMessages(conv.messages),
+                }))
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .slice(0, 50);
+            localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(payload));
+        },
+        loadConversations() {
+            try {
+                const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    this.conversations = parsed
+                        .filter(conv => conv && conv.id && conv.sessionId)
+                        .map(conv => ({
+                            id: conv.id,
+                            sessionId: conv.sessionId,
+                            title: conv.title || this.conversationTitle(conv.messages),
+                            messages: Array.isArray(conv.messages) ? conv.messages : [],
+                            createdAt: conv.createdAt || Date.now(),
+                            updatedAt: conv.updatedAt || conv.createdAt || Date.now(),
+                        }))
+                        .sort((a, b) => b.updatedAt - a.updatedAt);
+                }
+            } catch (_) {
+                this.conversations = [createConversation()];
+            }
+
+            if (this.conversations.length === 0) {
+                this.conversations = [createConversation()];
+            }
+            this.selectConversation(this.conversations[0].id);
+        },
+        persistActiveConversation() {
+            const conv = this.activeConversation();
+            if (!conv) return;
+            conv.messages = this.messages;
+            conv.title = this.conversationTitle(this.messages);
+            conv.updatedAt = Date.now();
+            this.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+            this.persistConversations();
+        },
+        selectConversation(conversationId) {
+            if (this.isStreaming) return;
+            const conv = this.conversations.find(item => item.id === conversationId);
+            if (!conv) return;
+            this.activeConversationId = conv.id;
+            this.sessionId = conv.sessionId;
+            this.messages = conv.messages;
+            this.selectedImage = null;
+            this.selectedImageFile = null;
+            this.userInput = '';
+            this.$nextTick(() => this.scrollToBottom());
+        },
+        newChat() {
+            if (this.isStreaming) this.stopStreaming();
+            const conv = createConversation();
+            this.conversations.unshift(conv);
+            this.activeConversationId = conv.id;
+            this.sessionId = conv.sessionId;
+            this.messages = conv.messages;
+            this.userInput = '';
+            this.streamText = '';
+            this.selectedImage = null;
+            this.selectedImageFile = null;
+            this.persistConversations();
+            this.$nextTick(() => this.autoResize());
+        },
+        deleteConversation(conversationId) {
+            if (this.isStreaming) return;
+            const index = this.conversations.findIndex(conv => conv.id === conversationId);
+            if (index === -1) return;
+            this.conversations.splice(index, 1);
+            if (this.conversations.length === 0) {
+                this.conversations.push(createConversation());
+            }
+            if (this.activeConversationId === conversationId) {
+                this.selectConversation(this.conversations[0].id);
+            }
+            this.persistConversations();
+        },
+        formatConversationTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            const now = new Date();
+            if (date.toDateString() === now.toDateString()) {
+                return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            }
+            return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
         },
 
         // ── Chat ─────────────────────────────────────────────────
@@ -93,6 +230,7 @@ createApp({
             }
 
             this.messages.push({ role: 'user', text: text || '[图片]', image: this.selectedImage });
+            this.persistActiveConversation();
             this.userInput = '';
             this.selectedImage = null;
             this.selectedImageFile = null;
@@ -112,7 +250,10 @@ createApp({
             const botMsgIdx = this.messages.length - 1;
 
             try {
-                const requestBody = { message: text || '' };
+                const requestBody = {
+                    message: text || '',
+                    session_id: this.sessionId,
+                };
                 if (imagePath) requestBody.image_path = imagePath;
 
                 const response = await fetch('/chat/stream', {
@@ -172,6 +313,7 @@ createApp({
                     delete botMsg._streaming;
                     if (!botMsg.text && !botMsg.thinking) botMsg.text = '[空回复]';
                 }
+                this.persistActiveConversation();
                 this.$nextTick(() => this.scrollToBottom());
             }
         },
@@ -184,9 +326,7 @@ createApp({
         },
 
         clearChat() {
-            this.messages = [];
-            this.streamText = '';
-            this.isStreaming = false;
+            this.newChat();
         },
 
         handleKeyDown(e) {

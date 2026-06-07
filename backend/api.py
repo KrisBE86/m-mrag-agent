@@ -60,6 +60,7 @@ def _cleanup_old_document_data(filename: str) -> None:
 class ChatRequest(BaseModel):
     message: str
     image_path: str | None = None
+    session_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -74,7 +75,7 @@ async def chat(req: ChatRequest, _: bool = Depends(verify_admin)):
     if not req.message.strip() and not req.image_path:
         raise HTTPException(status_code=400, detail="消息不能为空")
     try:
-        response = chat_sync(req.message, req.image_path)
+        response = chat_sync(req.message, req.image_path, session_id=req.session_id)
         return ChatResponse(response=response)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"聊天失败: {str(e)}")
@@ -87,7 +88,7 @@ async def chat_stream_endpoint(req: ChatRequest, _: bool = Depends(verify_admin)
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     return StreamingResponse(
-        chat_stream(req.message, req.image_path),
+        chat_stream(req.message, req.image_path, session_id=req.session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",

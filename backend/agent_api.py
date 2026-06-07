@@ -23,6 +23,7 @@ Agent API — 同步对话和 SSE 流式输出包装器。
 """
 
 import json
+import re
 from typing import AsyncGenerator, Optional
 
 from agent import build_agent, build_agent_async
@@ -33,11 +34,29 @@ _sync_agent = build_agent()
 # 延迟加载的异步 agent —— 仅在事件循环内创建。
 _async_agent = None
 
-# 当前固定 thread_id（单用户测试）。
-DEFAULT_CONFIG = {"configurable": {"thread_id": "main-chat"}}
+DEFAULT_THREAD_ID = "main-chat"
+DEFAULT_CONFIG = {"configurable": {"thread_id": DEFAULT_THREAD_ID}}
 
-# Redis 上下文记忆 key 前缀
-CONTEXT_KEY = "mragagent:context:main-chat"
+
+def _safe_thread_id(session_id: str | None) -> str:
+    raw = (session_id or DEFAULT_THREAD_ID).strip() or DEFAULT_THREAD_ID
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", raw)
+
+
+def _config_for_session(session_id: str | None = None, config: Optional[dict] = None) -> dict:
+    """Build a LangGraph config with an isolated thread_id per frontend session."""
+    cfg = dict(config or DEFAULT_CONFIG)
+    configurable = dict(cfg.get("configurable", {}))
+    if session_id:
+        configurable["thread_id"] = _safe_thread_id(session_id)
+    elif "thread_id" not in configurable:
+        configurable["thread_id"] = DEFAULT_THREAD_ID
+    cfg["configurable"] = configurable
+    return cfg
+
+
+def _thread_id_from_config(config: dict) -> str:
+    return _safe_thread_id((config.get("configurable") or {}).get("thread_id"))
 
 
 async def _get_async_agent():
@@ -81,11 +100,20 @@ def _build_user_message(text: str, image_path: str | None = None) -> str:
     return f"[用户上传了图片: {image_path}]\n\n请帮我看看这张图片"
 
 
-def chat_sync(user_message: str, image_path: str | None = None, config: Optional[dict] = None) -> str:
+def chat_sync(
+    user_message: str,
+    image_path: str | None = None,
+    session_id: str | None = None,
+    config: Optional[dict] = None,
+) -> str:
     """
     同步对话: 调用 agent 并返回响应文本。
     """
-    cfg = config or DEFAULT_CONFIG
+    from backend.tools import reset_tool_call_guards, set_active_thread_id
+
+    reset_tool_call_guards()
+    cfg = _config_for_session(session_id, config)
+    set_active_thread_id(_thread_id_from_config(cfg))
     content = _build_user_message(user_message, image_path)
     result = _sync_agent.invoke(
         {"messages": [{"role": "user", "content": content}]},
@@ -97,6 +125,7 @@ def chat_sync(user_message: str, image_path: str | None = None, config: Optional
 async def chat_stream(
     user_message: str,
     image_path: str | None = None,
+    session_id: str | None = None,
     config: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """
@@ -111,8 +140,12 @@ async def chat_stream(
         作为 "content" 发出。
     """
     agent = await _get_async_agent()
-    cfg = config or DEFAULT_CONFIG
+    cfg = _config_for_session(session_id, config)
 
+    from backend.tools import reset_tool_call_guards, set_active_thread_id
+
+    reset_tool_call_guards()
+    set_active_thread_id(_thread_id_from_config(cfg))
     content = _build_user_message(user_message, image_path)
 
     text_buffer: str = ""
