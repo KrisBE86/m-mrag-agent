@@ -4,17 +4,21 @@ API 路由：聊天（同步 + SSE 流式）和文档管理。
 
 import json
 import os
-import uuid
+import hashlib
+import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from backend.agent_api import chat_sync, chat_stream
 from backend.auth import verify_admin
 from backend.document_loader import ingest_document
 from backend.tts_service import TTS_SAMPLE_RATE, synthesize as tts_synthesize
+from backend.url_ingestor import URLIngestError, download_url_document
 
 router = APIRouter()
 
@@ -22,8 +26,26 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "documents"
 IMAGE_UPLOAD_DIR = DATA_DIR / "user_uploads"
+REFERENCE_IMAGE_DIR = DATA_DIR / "reference_images"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+REFERENCE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _cleanup_reference_images(filename: str) -> None:
+    """删除某个文档旧抽图，避免重传后 reference_images 中堆积重复图。"""
+    safe_filename = re.sub(r"[^\w\-\.]", "_", filename)
+    removed = 0
+    for path in REFERENCE_IMAGE_DIR.glob(f"{safe_filename}_img*"):
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except Exception as e:
+            print(f"  ⚠ 清理旧参考图失败 {path.name}: {e}")
+    if removed:
+        print(f"  ♻ 已清理旧参考图: {removed} 张")
 
 
 def _cleanup_old_document_data(filename: str) -> None:
@@ -36,8 +58,8 @@ def _cleanup_old_document_data(filename: str) -> None:
     from backend.parent_chunk_store import parent_chunk_store
 
     filter_expr = f'filename == "{filename}"'
+    # 移除 BM25 统计信息。
     try:
-        # 移除 BM25 统计信息。
         rows = milvus_manager.query(
             collection=milvus_manager.text_collection,
             filter_expr=filter_expr,
@@ -47,13 +69,27 @@ def _cleanup_old_document_data(filename: str) -> None:
         texts = [r.get("text") or "" for r in rows]
         if texts:
             bm25.increment_remove_documents(texts)
-
-        milvus_manager.delete(milvus_manager.text_collection, filter_expr)
-        milvus_manager.delete(milvus_manager.image_collection, filter_expr)
-        parent_chunk_store.delete_by_filename(filename)
-        print(f"  ♻ 已清理旧数据: {filename}")
     except Exception as e:
-        print(f"  ⚠ 清理旧数据时出错: {e}")
+        print(f"  ⚠ 清理 BM25 旧数据时出错: {e}")
+
+    try:
+        milvus_manager.delete(milvus_manager.text_collection, filter_expr)
+    except Exception as e:
+        print(f"  ⚠ 清理 Text Milvus 旧数据时出错: {e}")
+
+    try:
+        milvus_manager.delete(milvus_manager.image_collection, filter_expr)
+    except Exception as e:
+        print(f"  ⚠ 清理 Image Milvus 旧数据时出错: {e}")
+
+    try:
+        parent_chunk_store.delete_by_filename(filename)
+    except Exception as e:
+        print(f"  ⚠ 清理 PostgreSQL 旧数据时出错: {e}")
+
+    _cleanup_reference_images(filename)
+
+    print(f"  ♻ 已清理旧数据: {filename}")
 
 
 # ── 请求/响应模型 ──────────────────────────────────────
@@ -76,6 +112,12 @@ class TTSResponse(BaseModel):
     audio_base64: str
     sample_rate: int
     encoding: str = "wav"
+
+
+class URLImportRequest(BaseModel):
+    url: str
+    use_llm_naming: bool = False
+    use_vlm_description: bool = True
 
 
 # ── 聊天路由 ──────────────────────────────────────────────────
@@ -128,7 +170,8 @@ async def tts(req: TTSRequest, _: bool = Depends(verify_admin)):
 @router.post("/documents/upload")
 async def upload_document(
     files: list[UploadFile] = File(...),
-    use_llm_naming: bool = False,
+    use_llm_naming: bool = Form(False),
+    use_vlm_description: bool = Form(True),
     _: bool = Depends(verify_admin),
 ):
     """上传并录入文档（PDF/Word），支持批量上传。"""
@@ -145,7 +188,7 @@ async def upload_document(
 
         # 验证文件类型。
         file_lower = filename.lower()
-        if not (file_lower.endswith(".pdf") or file_lower.endswith((".docx", ".doc"))):
+        if not (file_lower.endswith(".pdf") or file_lower.endswith((".docx", ".doc", ".html", ".htm"))):
             results.append({
                 "filename": filename,
                 "status": "error",
@@ -166,7 +209,11 @@ async def upload_document(
 
         # 录入系统。
         try:
-            ingest_document(str(file_path), use_llm_naming=use_llm_naming)
+            ingest_document(
+                str(file_path),
+                use_llm_naming=use_llm_naming,
+                use_vlm_description=use_vlm_description,
+            )
             results.append({
                 "filename": safe_name,
                 "status": "success",
@@ -189,6 +236,47 @@ async def upload_document(
         "results": results,
         "summary": f"成功 {success_count}/{len(results)}" + (f"，失败 {fail_count}" if fail_count else ""),
     }
+
+
+@router.post("/documents/import-url")
+async def import_url_document(
+    req: URLImportRequest,
+    _: bool = Depends(verify_admin),
+):
+    """下载公开 URL 并录入文档，支持 PDF/Word/HTML。"""
+    try:
+        downloaded = await run_in_threadpool(download_url_document, req.url, UPLOAD_DIR)
+    except URLIngestError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        raise HTTPException(status_code=400, detail=f"URL 下载失败: HTTP {status_code}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"URL 下载失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"URL 下载失败: {str(e)}")
+
+    try:
+        # URL 文件名由来源和 URL hash 生成。同一 URL 重复导入时先清理旧索引。
+        _cleanup_old_document_data(downloaded.filename)
+        await run_in_threadpool(
+            ingest_document,
+            downloaded.file_path,
+            use_llm_naming=req.use_llm_naming,
+            use_vlm_description=req.use_vlm_description,
+            source_url=downloaded.final_url,
+        )
+        return {
+            "status": "success",
+            "filename": downloaded.filename,
+            "source_url": downloaded.source_url,
+            "final_url": downloaded.final_url,
+            "content_type": downloaded.content_type,
+            "size": downloaded.size_bytes,
+            "message": f"URL 文档 {downloaded.filename} 已成功处理",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"URL 文档处理失败: {str(e)}")
 
 
 @router.get("/documents")
@@ -237,17 +325,22 @@ async def upload_image(
     if not file_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")):
         raise HTTPException(status_code=400, detail="仅支持 JPG/PNG/GIF/BMP/WEBP 图片")
 
-    # 使用 UUID 避免文件名冲突。
     suffix = Path(file.filename).suffix.lower()
-    safe_name = f"{uuid.uuid4().hex}{suffix}"
-    file_path = IMAGE_UPLOAD_DIR / safe_name
     content = await file.read()
-    file_path.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    safe_name = f"{digest}{suffix}"
+    file_path = IMAGE_UPLOAD_DIR / safe_name
+    created = False
+    if not file_path.exists():
+        file_path.write_bytes(content)
+        created = True
 
     return {
         "status": "ok",
         "image_path": str(file_path),
         "original_name": file.filename,
+        "deduplicated": not created,
+        "sha256": digest,
     }
 
 

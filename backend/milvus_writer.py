@@ -12,6 +12,15 @@ from backend.embedding import bge_embeddings, bm25, clip_embeddings
 from backend.milvus_client import milvus_manager
 
 
+def _truncate_utf8(value, max_bytes: int) -> str:
+    """Truncate a string to a Milvus VARCHAR byte limit without splitting UTF-8."""
+    text = "" if value is None else str(value)
+    data = text.encode("utf-8")
+    if len(data) <= max_bytes:
+        return text
+    return data[:max_bytes].decode("utf-8", errors="ignore").rstrip()
+
+
 class MilvusWriter:
     """图像 POI 和文本块 collection 的批量写入器。"""
 
@@ -33,7 +42,7 @@ class MilvusWriter:
         用 Chinese-CLIP 编码参考图像并写入 image_poi_collection。
 
         image_pois 中每个元素应包含：
-            chunk_id, image_path, poi_name, site, cave,
+            chunk_id, filename, image_path, source_url, poi_name, site, cave,
             poi_description, distinguishing_features, tags
         """
         if not image_pois:
@@ -50,15 +59,17 @@ class MilvusWriter:
             insert_data = []
             for item, vec in zip(batch, image_vectors):
                 insert_data.append({
-                    "chunk_id": item["chunk_id"],
+                    "chunk_id": _truncate_utf8(item["chunk_id"], 512),
+                    "filename": _truncate_utf8(item.get("filename", ""), 255),
                     "image_vector": vec,
-                    "image_path": item["image_path"],
-                    "poi_name": item.get("poi_name", ""),
-                    "site": item.get("site", ""),
-                    "cave": item.get("cave", ""),
-                    "poi_description": item.get("poi_description", ""),
-                    "distinguishing_features": item.get("distinguishing_features", ""),
-                    "tags": item.get("tags", ""),
+                    "image_path": _truncate_utf8(item["image_path"], 512),
+                    "source_url": _truncate_utf8(item.get("source_url", ""), 2048),
+                    "poi_name": _truncate_utf8(item.get("poi_name", ""), 256),
+                    "site": _truncate_utf8(item.get("site", ""), 128),
+                    "cave": _truncate_utf8(item.get("cave", ""), 128),
+                    "poi_description": _truncate_utf8(item.get("poi_description", ""), 2000),
+                    "distinguishing_features": _truncate_utf8(item.get("distinguishing_features", ""), 1000),
+                    "tags": _truncate_utf8(item.get("tags", ""), 512),
                 })
 
             self._milvus.insert_to_image_collection(insert_data)
@@ -82,7 +93,7 @@ class MilvusWriter:
         每个文档字典应包含：
             text, filename, file_type, file_path, page_number, chunk_idx,
             chunk_id, parent_chunk_id, root_chunk_id, chunk_level,
-            site, cave, poi_name
+            site, cave, poi_name, source_url
         """
         if not documents:
             return
@@ -107,19 +118,20 @@ class MilvusWriter:
                 insert_data.append({
                     "dense_embedding": dense_vec,
                     "sparse_embedding": sparse_vec,
-                    "text": doc["text"],
-                    "filename": doc.get("filename", ""),
-                    "file_type": doc.get("file_type", ""),
-                    "file_path": doc.get("file_path", ""),
+                    "text": _truncate_utf8(doc["text"], 4000),
+                    "filename": _truncate_utf8(doc.get("filename", ""), 255),
+                    "file_type": _truncate_utf8(doc.get("file_type", ""), 50),
+                    "file_path": _truncate_utf8(doc.get("file_path", ""), 1024),
+                    "source_url": _truncate_utf8(doc.get("source_url", ""), 2048),
                     "page_number": doc.get("page_number", 0),
                     "chunk_idx": doc.get("chunk_idx", 0),
-                    "chunk_id": doc.get("chunk_id", ""),
-                    "parent_chunk_id": doc.get("parent_chunk_id", ""),
-                    "root_chunk_id": doc.get("root_chunk_id", ""),
+                    "chunk_id": _truncate_utf8(doc.get("chunk_id", ""), 512),
+                    "parent_chunk_id": _truncate_utf8(doc.get("parent_chunk_id", ""), 512),
+                    "root_chunk_id": _truncate_utf8(doc.get("root_chunk_id", ""), 512),
                     "chunk_level": doc.get("chunk_level", 0),
-                    "site": doc.get("site", ""),
-                    "cave": doc.get("cave", ""),
-                    "poi_name": doc.get("poi_name", ""),
+                    "site": _truncate_utf8(doc.get("site", ""), 128),
+                    "cave": _truncate_utf8(doc.get("cave", ""), 128),
+                    "poi_name": _truncate_utf8(doc.get("poi_name", ""), 256),
                 })
 
             self._milvus.insert_to_text_collection(insert_data)

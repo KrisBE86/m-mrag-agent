@@ -99,8 +99,10 @@ class MilvusManager:
             schema = client.create_schema(auto_id=True, enable_dynamic_field=True)
             schema.add_field("id", DataType.INT64, is_primary=True, auto_id=True)
             schema.add_field("chunk_id", DataType.VARCHAR, max_length=512)
+            schema.add_field("filename", DataType.VARCHAR, max_length=255)
             schema.add_field("image_vector", DataType.FLOAT_VECTOR, dim=dense_dim)
             schema.add_field("image_path", DataType.VARCHAR, max_length=512)
+            schema.add_field("source_url", DataType.VARCHAR, max_length=2048)
             schema.add_field("poi_name", DataType.VARCHAR, max_length=256)
             schema.add_field("site", DataType.VARCHAR, max_length=128)
             schema.add_field("cave", DataType.VARCHAR, max_length=128)
@@ -136,7 +138,7 @@ class MilvusManager:
         """
 
         output_fields = [
-            "chunk_id", "image_path", "poi_name", "site", "cave",
+            "chunk_id", "filename", "image_path", "source_url", "poi_name", "site", "cave",
             "poi_description", "distinguishing_features", "tags",
         ]
 
@@ -158,7 +160,9 @@ class MilvusManager:
                 entity = hit.get("entity", {})
                 formatted.append({
                     "chunk_id": entity.get("chunk_id", ""),
+                    "filename": entity.get("filename", ""),
                     "image_path": entity.get("image_path", ""),
+                    "source_url": entity.get("source_url", ""),
                     "poi_name": entity.get("poi_name", ""),
                     "site": entity.get("site", ""),
                     "cave": entity.get("cave", ""),
@@ -194,6 +198,7 @@ class MilvusManager:
             schema.add_field("filename", DataType.VARCHAR, max_length=255)
             schema.add_field("file_type", DataType.VARCHAR, max_length=50)
             schema.add_field("file_path", DataType.VARCHAR, max_length=1024)
+            schema.add_field("source_url", DataType.VARCHAR, max_length=2048)
             schema.add_field("page_number", DataType.INT64)
             schema.add_field("chunk_idx", DataType.INT64)
             schema.add_field("chunk_id", DataType.VARCHAR, max_length=512)
@@ -240,7 +245,7 @@ class MilvusManager:
         """
 
         output_fields = [
-            "text", "filename", "file_type", "page_number",
+            "text", "filename", "file_type", "file_path", "source_url", "page_number",
             "chunk_id", "parent_chunk_id", "root_chunk_id", "chunk_level",
             "chunk_idx", "site", "cave", "poi_name",
         ]
@@ -281,6 +286,8 @@ class MilvusManager:
                     "text": hit.get("entity", {}).get("text", ""),
                     "filename": hit.get("entity", {}).get("filename", ""),
                     "file_type": hit.get("entity", {}).get("file_type", ""),
+                    "file_path": hit.get("entity", {}).get("file_path", ""),
+                    "source_url": hit.get("entity", {}).get("source_url", ""),
                     "page_number": hit.get("entity", {}).get("page_number", 0),
                     "chunk_id": hit.get("entity", {}).get("chunk_id", ""),
                     "parent_chunk_id": hit.get("entity", {}).get("parent_chunk_id", ""),
@@ -348,7 +355,7 @@ class MilvusManager:
             collection=self.text_collection,
             filter_expr=filter_expr,
             output_fields=[
-                "text", "filename", "file_type", "page_number",
+                "text", "filename", "file_type", "file_path", "source_url", "page_number",
                 "chunk_id", "parent_chunk_id", "root_chunk_id",
                 "chunk_level", "chunk_idx", "site", "cave", "poi_name",
             ],

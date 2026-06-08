@@ -45,6 +45,20 @@ docker compose up -d
 
 启动 PostgreSQL 15、Redis 7、Milvus 2.5 等服务。
 
+常用端口：
+
+| 服务 | 端口 / 地址 | 用途 |
+|------|-------------|------|
+| Web / API | http://localhost:8000 | FastAPI 后端与 Web 前端 |
+| PostgreSQL | `localhost:5432` | 父级 chunk、业务数据存储 |
+| Redis | `localhost:6379` | 缓存与状态数据 |
+| Milvus gRPC | `localhost:19530` | 向量库连接端口 |
+| Milvus HTTP / Health | http://localhost:9091 | Milvus HTTP 与健康检查 |
+| Attu | http://localhost:8080 | Milvus 可视化管理界面 |
+| Adminer | http://localhost:8081 | PostgreSQL 可视化管理界面 |
+| MinIO API | http://localhost:9000 | Milvus 对象存储 API |
+| MinIO Console | http://localhost:9001 | MinIO 可视化控制台 |
+
 ### 4. 启动后端
 
 ```bash

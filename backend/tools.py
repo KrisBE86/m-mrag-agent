@@ -5,7 +5,7 @@ MRagAgent 的 LangChain @tool 函数。
   1. recall_conversation_context — 查询对话上下文，判断是否需要识图
   2. identify_from_image — CLIP 图像搜索 → 文物点文字描述
   3. identify_from_image_vlm — 豆包视觉描述（不直接检索）
-  4. search_knowledge_base — 混合文本 RAG（BGE-M3 + BM25 + 自动合并）
+  4. search_knowledge_base — 使用后端构造 query 的混合文本 RAG
 
 Agent 上下文优先路由逻辑：
   - 收到消息 → recall_conversation_context 查上下文
@@ -27,8 +27,12 @@ from backend.image_retriever import identify_from_image_vlm as _vlm_identify
 _CONTEXT_KEY_PREFIX = "mragagent:context"
 _ACTIVE_THREAD_ID: ContextVar[str] = ContextVar("mragagent_thread_id", default="main-chat")
 _ACTIVE_USER_QUESTION: ContextVar[str] = ContextVar("mragagent_user_question", default="")
+_PENDING_VISUAL_DESCRIPTION: ContextVar[str] = ContextVar("mragagent_pending_visual_description", default="")
+_PENDING_CLIP_CONTEXT: ContextVar[dict] = ContextVar("mragagent_pending_clip_context", default={})
 _ACTIVE_THREAD_ID_FALLBACK = "main-chat"
 _ACTIVE_USER_QUESTION_FALLBACK = ""
+_PENDING_VISUAL_DESCRIPTION_FALLBACK = ""
+_PENDING_CLIP_CONTEXT_FALLBACK: dict = {}
 _LAST_RAG_CONTEXT: dict | None = None
 _KNOWLEDGE_TOOL_CALLS_THIS_TURN = 0
 
@@ -68,16 +72,78 @@ def _context_key() -> str:
     return f"{_CONTEXT_KEY_PREFIX}:{thread_id}"
 
 
-def _build_visual_rag_query(visual_description: str) -> str:
+def _set_pending_visual_description(description: str) -> None:
+    global _PENDING_VISUAL_DESCRIPTION_FALLBACK
+    value = (description or "").strip()
+    _PENDING_VISUAL_DESCRIPTION_FALLBACK = value
+    _PENDING_VISUAL_DESCRIPTION.set(value)
+
+
+def _pop_pending_visual_description() -> str:
+    global _PENDING_VISUAL_DESCRIPTION_FALLBACK
+    description = _PENDING_VISUAL_DESCRIPTION.get()
+    if not description and _PENDING_VISUAL_DESCRIPTION_FALLBACK:
+        description = _PENDING_VISUAL_DESCRIPTION_FALLBACK
+    _PENDING_VISUAL_DESCRIPTION_FALLBACK = ""
+    _PENDING_VISUAL_DESCRIPTION.set("")
+    return description
+
+
+def _set_pending_clip_context(context: dict | None) -> None:
+    global _PENDING_CLIP_CONTEXT_FALLBACK
+    value = context or {}
+    _PENDING_CLIP_CONTEXT_FALLBACK = value
+    _PENDING_CLIP_CONTEXT.set(value)
+
+
+def _pop_pending_clip_context() -> dict:
+    global _PENDING_CLIP_CONTEXT_FALLBACK
+    context = _PENDING_CLIP_CONTEXT.get()
+    if not context and _PENDING_CLIP_CONTEXT_FALLBACK:
+        context = _PENDING_CLIP_CONTEXT_FALLBACK
+    _PENDING_CLIP_CONTEXT_FALLBACK = {}
+    _PENDING_CLIP_CONTEXT.set({})
+    return context or {}
+
+
+def _build_initial_rag_query() -> tuple[str, str]:
     user_question = _active_user_question()
-    return (
-        f"用户原始问题：{user_question}\n"
-        f"图片视觉描述：{visual_description}\n"
-        "检索任务：请在知识库中查找是否存在与该图片视觉特征相匹配的具体文物点，"
-        "并回答用户原始问题。只有当检索结果能够明确支持同一个具体文物点的名称、位置和关键视觉特征时，"
-        "才可以给出具体名称。若只能找到相似类型、相似风格、泛泛佛像信息，或证据不足以确认具体文物点，"
-        "请说明知识库没有足够可靠依据，不能强行命名。"
-    )
+
+    visual_description = _pop_pending_visual_description()
+    if visual_description:
+        return (
+            f"用户问题：{user_question}\n"
+            f"图片描述：{visual_description}",
+            "vlm_visual_description",
+        )
+
+    clip_context = _pop_pending_clip_context()
+    if clip_context:
+        lines = [f"用户问题：{user_question}"]
+        name = clip_context.get("name")
+        location = clip_context.get("location")
+        if name:
+            lines.append(f"图片识别结果：{name}")
+        if location:
+            lines.append(f"位置：{location}")
+        return "\n".join(lines), "clip_identification"
+
+    from backend.cache import cache
+
+    context = cache.get_json(_context_key())
+    pois = context.get("pois", []) if isinstance(context, dict) else []
+    if pois:
+        lines = [f"用户问题：{user_question}", "当前上下文："]
+        for poi in pois:
+            name = poi.get("name", "")
+            location = poi.get("location", "")
+            if name and location:
+                lines.append(f"{name}（{location}）")
+            elif name:
+                lines.append(name)
+        return "\n".join(lines), "conversation_context"
+
+    return f"用户问题：{user_question}", "raw_user_question"
 
 
 def _set_last_rag_context(context: dict) -> None:
@@ -98,6 +164,8 @@ def reset_tool_call_guards() -> None:
     """每轮对话开始时重置知识库工具调用限制。"""
     global _KNOWLEDGE_TOOL_CALLS_THIS_TURN
     _KNOWLEDGE_TOOL_CALLS_THIS_TURN = 0
+    _set_pending_visual_description("")
+    _set_pending_clip_context({})
 
 
 def _format_doc_header(doc: dict, index: int) -> str:
@@ -132,10 +200,9 @@ def _format_rag_result(rag_result: dict) -> str:
     if rag_trace:
         _set_last_rag_context({"rag_trace": rag_trace})
 
-    if not docs:
-        return "【未找到相关内容】知识库中没有检索到足够相关的资料。"
-
     sections = []
+    query_source = rag_trace.get("query_source", "unknown")
+    actual_query = rag_trace.get("query", "")
     grade_score = rag_trace.get("grade_score", "unknown")
     retrieval_stage = rag_trace.get("retrieval_stage", "unknown")
     rewrite_needed = bool(rag_trace.get("rewrite_needed"))
@@ -146,6 +213,13 @@ def _format_rag_result(rag_result: dict) -> str:
         f"{'查询改写/扩展检索' if rewrite_needed else '直接使用初检结果'}；"
         f"最终阶段={retrieval_stage}；扩展策略={expansion_type}"
     )
+    sections.append(f"【Query来源】{query_source}")
+    if actual_query:
+        sections.append(f"【实际初始检索Query】\n{actual_query}")
+
+    if not docs:
+        sections.append("【未找到相关内容】知识库中没有检索到足够相关的资料。")
+        return "\n\n".join(sections)
 
     sections.append(
         "【回答约束】如果本次检索用于图片识别，请只在检索结果明确支持同一个具体文物点的名称、"
@@ -207,6 +281,8 @@ def _cache_identified_poi(result_text: str) -> None:
     if not any(p["name"] == name for p in existing["pois"]):
         existing["pois"].append({"name": name, "location": location})
         cache.set_json(_context_key(), existing, ttl=3600)
+
+    _set_pending_clip_context({"name": name, "location": location})
 
 
 @tool
@@ -274,9 +350,9 @@ def identify_from_image_vlm(image_path: str, top_k: int = 5) -> str:
     此工具只通过豆包视觉大模型（Doubao Vision）生成图片的详细视觉描述
     （不猜测场景名称，只描述看到的视觉特征），不会直接检索知识库。
 
-    调用此工具后，必须继续调用 search_knowledge_base。search_knowledge_base 的 query
-    必须同时包含用户原始问题和本工具返回的图片视觉描述。不要直接基于本工具结果回答
-    具体文物点名称。
+    调用此工具后，必须继续调用 search_knowledge_base。search_knowledge_base 没有 query
+    参数，后端会自动使用用户原始问题和本工具生成的视觉描述拼接检索 query。不要直接基于
+    本工具结果回答具体文物点名称。
 
     相比 CLIP 图像对比，此方法对同一石窟内不同位置的文物点区分能力更强，
     因为它能捕捉到手印、服饰、空间位置等 CLIP 无法区分的细节。
@@ -286,23 +362,24 @@ def identify_from_image_vlm(image_path: str, top_k: int = 5) -> str:
         top_k: 保留兼容旧调用，当前不用于检索
 
     返回:
-        图片视觉描述，以及必须继续调用 search_knowledge_base 的建议查询。
+        图片视觉描述。
     """
     visual_description = _vlm_identify(image_path, top_k=top_k)
     if "【错误】" in visual_description:
+        _set_pending_visual_description("")
         return visual_description
 
-    suggested_query = _build_visual_rag_query(visual_description)
-    return (
-        f"【图片视觉描述】{visual_description}\n\n"
-        "【需要继续检索】请立即调用 search_knowledge_base，不要直接回答具体文物点名称。\n"
-        f"【建议查询】\n{suggested_query}"
-    )
+    _set_pending_visual_description(visual_description)
+    return visual_description
 
 
 @tool
-def search_knowledge_base(query: str) -> str:
+def search_knowledge_base() -> str:
     """搜索文化遗产知识库。当用户询问关于文物、石窟、古建筑的具体问题时使用。
+
+    此工具没有 query 参数。Agent 只负责决定是否检索，不能自行编写、改写或猜测检索 query。
+    后端会根据真实用户问题、当前对话上下文、CLIP 高置信度识别结果或 VLM 视觉描述构造
+    初始检索 query。若初检相关性不足，RAG graph 内部再执行 step-back/rewrite。
 
     支持的问题类型包括但不限于：
     - 文物历史背景（"云冈石窟是什么时候开凿的"）
@@ -310,10 +387,6 @@ def search_knowledge_base(query: str) -> str:
     - 建筑形制（"石窟的洞窟形制有哪些类型"）
     - 考古发现（"云冈石窟的考古新发现"）
     - 文化意义（"云冈石窟为什么被列为世界文化遗产"）
-
-    参数:
-        query: 搜索查询文本，建议包含具体的文物名称、地点等关键词。
-        如果 query 来自图片识别 fallback，必须包含用户原始问题和图片视觉描述。
 
     返回:
         知识库中检索到的相关内容，经过语义搜索和自动合并。
@@ -328,5 +401,9 @@ def search_knowledge_base(query: str) -> str:
 
     from backend.rag_pipeline import run_rag_graph
 
+    query, query_source = _build_initial_rag_query()
     rag_result = run_rag_graph(query)
+    rag_trace = rag_result.get("rag_trace", {}) if isinstance(rag_result, dict) else {}
+    if rag_trace:
+        rag_trace["query_source"] = query_source
     return _format_rag_result(rag_result)

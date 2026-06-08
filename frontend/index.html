@@ -185,7 +185,7 @@
                 <div class="upload-section">
                     <h3><i class="fas fa-upload"></i> 上传文档</h3>
                     <div class="upload-area">
-                        <input type="file" ref="docInput" @change="handleDocSelect" accept=".pdf,.doc,.docx" multiple style="display:none" />
+                        <input type="file" ref="docInput" @change="handleDocSelect" accept=".pdf,.doc,.docx,.html,.htm" multiple style="display:none" />
                         <button @click="$refs.docInput.click()" class="upload-btn">
                             <i class="fas fa-cloud-upload-alt"></i> 选择文件
                         </button>
@@ -209,10 +209,33 @@
                             <label class="llm-naming-label">
                                 <input type="checkbox" v-model="useLLMNaming" /> LLM 命名图片
                             </label>
+                            <label class="llm-naming-label">
+                                <input type="checkbox" v-model="useVLMDescription" /> VLM 描述图片
+                            </label>
                             <button @click="uploadDocument" class="btn-primary" :disabled="isUploading">
                                 <i class="fas fa-upload"></i>
                                 {{ isUploading ? '处理中...' : '开始处理 (' + selectedDocs.length + ' 个文件)' }}
                             </button>
+                        </div>
+                        <div class="url-import-box">
+                            <div class="url-input-row">
+                                <i class="fas fa-link"></i>
+                                <input
+                                    v-model="urlInput"
+                                    type="url"
+                                    placeholder="输入公开网页、PDF 或 Word URL"
+                                    :disabled="isImportingUrl"
+                                    @keydown.enter.prevent="importUrlDocument"
+                                />
+                                <button
+                                    @click="importUrlDocument"
+                                    class="btn-primary"
+                                    :disabled="isImportingUrl || !urlInput.trim()"
+                                >
+                                    <i :class="isImportingUrl ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
+                                    {{ isImportingUrl ? '导入中...' : '导入 URL' }}
+                                </button>
+                            </div>
                         </div>
                         <div v-if="uploadStatus" class="upload-status" :class="uploadStatus.type">
                             {{ uploadStatus.text }}

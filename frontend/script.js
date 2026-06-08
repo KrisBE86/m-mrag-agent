@@ -44,7 +44,10 @@ createApp({
             uploadResults: [],
             isUploading: false,
             useLLMNaming: false,
+            useVLMDescription: true,
             uploadStatus: null,
+            urlInput: '',
+            isImportingUrl: false,
             // Voice input / output
             isRecording: false,
             isTranscribing: false,
@@ -589,6 +592,7 @@ createApp({
             if (this.useLLMNaming) {
                 formData.append('use_llm_naming', 'true');
             }
+            formData.append('use_vlm_description', this.useVLMDescription ? 'true' : 'false');
 
             try {
                 const response = await fetch('/documents/upload', {
@@ -616,6 +620,42 @@ createApp({
                 this.uploadStatus = { type: 'error', text: '网络错误: ' + err.message };
             } finally {
                 this.isUploading = false;
+            }
+        },
+
+        async importUrlDocument() {
+            const url = this.urlInput.trim();
+            if (!url || this.isImportingUrl) return;
+            this.isImportingUrl = true;
+            this.uploadStatus = null;
+            this.uploadResults = [];
+
+            try {
+                const response = await fetch('/documents/import-url', {
+                    method: 'POST',
+                    headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                        url,
+                        use_llm_naming: this.useLLMNaming,
+                        use_vlm_description: this.useVLMDescription,
+                    }),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.detail || 'URL 导入失败');
+                }
+                this.uploadResults = [{
+                    filename: result.filename,
+                    status: result.status,
+                    message: result.message,
+                }];
+                this.uploadStatus = { type: 'success', text: result.message };
+                this.urlInput = '';
+                this.loadDocuments();
+            } catch (err) {
+                this.uploadStatus = { type: 'error', text: err.message };
+            } finally {
+                this.isImportingUrl = false;
             }
         },
 
