@@ -681,10 +681,20 @@ createApp({
                     method: 'DELETE',
                     headers: this.authHeaders(),
                 });
+                const result = await response.json().catch(() => ({}));
                 if (response.ok) {
+                    this.uploadStatus = { type: 'success', text: `已删除 ${filename}` };
                     this.loadDocuments();
+                    return;
                 }
-            } catch (_) {}
+                const message = result.detail || `删除 ${filename} 失败`;
+                this.uploadStatus = { type: 'warning', text: message };
+                alert(`警告：${message}`);
+            } catch (err) {
+                const message = `网络错误，删除请求未完成：${err.message}`;
+                this.uploadStatus = { type: 'warning', text: message };
+                alert(`警告：${message}`);
+            }
         },
 
         hasThinkingContent(msg) {

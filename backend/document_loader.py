@@ -471,13 +471,13 @@ def _inject_image_descriptions_into_page_text(page_text: str, image_records: lis
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 三级分块（对齐 SuperMew）
+# 三级分块
 # ═══════════════════════════════════════════════════════════════════
 
 class DocumentLoader:
     """
     文档加载器：读取 PDF/Word 文档，提取图片，并执行
-    三级层次分块（对齐 SuperMew）。
+    三级层次分块。
     """
 
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):

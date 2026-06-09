@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import text as sql_text
 from starlette.concurrency import run_in_threadpool
 
 from backend.agent_api import chat_sync, chat_stream
@@ -36,6 +37,7 @@ def _cleanup_reference_images(filename: str) -> None:
     """删除某个文档旧抽图，避免重传后 reference_images 中堆积重复图。"""
     safe_filename = re.sub(r"[^\w\-\.]", "_", filename)
     removed = 0
+    errors = []
     for path in REFERENCE_IMAGE_DIR.glob(f"{safe_filename}_img*"):
         if not path.is_file():
             continue
@@ -43,9 +45,11 @@ def _cleanup_reference_images(filename: str) -> None:
             path.unlink()
             removed += 1
         except Exception as e:
-            print(f"  ⚠ 清理旧参考图失败 {path.name}: {e}")
+            errors.append(f"{path.name}: {e}")
     if removed:
         print(f"  ♻ 已清理旧参考图: {removed} 张")
+    if errors:
+        raise RuntimeError("清理旧参考图失败: " + "; ".join(errors))
 
 
 def _cleanup_old_document_data(filename: str) -> None:
@@ -55,10 +59,14 @@ def _cleanup_old_document_data(filename: str) -> None:
     """
     from backend.milvus_client import milvus_manager
     from backend.embedding import bm25
+    from backend.database import SessionLocal
     from backend.parent_chunk_store import parent_chunk_store
 
     filter_expr = f'filename == "{filename}"'
-    # 移除 BM25 统计信息。
+    errors: list[str] = []
+    texts: list[str] = []
+
+    # 先做连接预检，避免本地文件删除前只清了一半远端索引。
     try:
         rows = milvus_manager.query(
             collection=milvus_manager.text_collection,
@@ -67,25 +75,56 @@ def _cleanup_old_document_data(filename: str) -> None:
             limit=10000,
         )
         texts = [r.get("text") or "" for r in rows]
-        if texts:
-            bm25.increment_remove_documents(texts)
     except Exception as e:
-        print(f"  ⚠ 清理 BM25 旧数据时出错: {e}")
+        errors.append(f"Text Milvus 不可用或查询失败: {e}")
+
+    try:
+        milvus_manager.query(
+            collection=milvus_manager.image_collection,
+            filter_expr=filter_expr,
+            output_fields=["filename"],
+            limit=1,
+        )
+    except Exception as e:
+        errors.append(f"Image Milvus 不可用或查询失败: {e}")
+
+    db = None
+    try:
+        db = SessionLocal()
+        db.execute(sql_text("SELECT 1"))
+    except Exception as e:
+        errors.append(f"PostgreSQL 不可用: {e}")
+    finally:
+        if db is not None:
+            db.close()
+
+    if errors:
+        raise RuntimeError("；".join(errors))
+
+    # 远端依赖都可用后，再开始真正删除索引和本地参考图。
+    if texts:
+        try:
+            bm25.increment_remove_documents(texts)
+        except Exception as e:
+            errors.append(f"清理 BM25 旧数据失败: {e}")
 
     try:
         milvus_manager.delete(milvus_manager.text_collection, filter_expr)
     except Exception as e:
-        print(f"  ⚠ 清理 Text Milvus 旧数据时出错: {e}")
+        errors.append(f"清理 Text Milvus 旧数据失败: {e}")
 
     try:
         milvus_manager.delete(milvus_manager.image_collection, filter_expr)
     except Exception as e:
-        print(f"  ⚠ 清理 Image Milvus 旧数据时出错: {e}")
+        errors.append(f"清理 Image Milvus 旧数据失败: {e}")
 
     try:
         parent_chunk_store.delete_by_filename(filename)
     except Exception as e:
-        print(f"  ⚠ 清理 PostgreSQL 旧数据时出错: {e}")
+        errors.append(f"清理 PostgreSQL 旧数据失败: {e}")
+
+    if errors:
+        raise RuntimeError("；".join(errors))
 
     _cleanup_reference_images(filename)
 
@@ -303,9 +342,16 @@ async def delete_document(filename: str, _: bool = Depends(verify_admin)):
 
     try:
         _cleanup_old_document_data(filename)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"索引清理失败，已保留本地文件。请确认 Docker/Milvus/PostgreSQL 已启动后重试。原因: {str(e)}",
+        )
+
+    try:
         file_path.unlink()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"索引已清理，但本地文件删除失败: {str(e)}")
 
     return {"status": "ok", "filename": filename}
 
